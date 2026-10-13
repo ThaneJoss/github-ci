@@ -53,6 +53,15 @@ class Fixtures(unittest.TestCase):
         self.put('.nvmrc', '24.10.0\n')
         self.assertEqual(self.detect()['node']['version'], '24.10.0')
 
+    def test_python_setup_ranges_preserve_patch_and_exclusions(self):
+        self.assertEqual(auto.python_setup_range('>=3.14.5,<3.15'), '>=3.14.5 <3.15.0')
+        self.assertEqual(auto.python_setup_range('==3.13.*'), '>=3.13.0 <3.14.0')
+        self.assertEqual(auto.python_setup_range('~=3.13.2'), '>=3.13.2 <3.14.0')
+        self.assertEqual(auto.python_setup_range('>3.13'), '>3.13.0')
+        self.assertEqual(auto.python_setup_range('>=3.13,!=3.13.1'), '>=3.13.0 <3.13.1 || >=3.13.0 >3.13.1')
+        with self.assertRaises(auto.Invalid):
+            auto.python_setup_range('~=3')
+
     def test_pnpm_fallback(self):
         self.package()
         self.put('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")

@@ -87,6 +87,40 @@ def version(value, kind):
     return value.removeprefix('v').strip()
 
 
+def python_setup_range(value):
+    """Translate the supported stable PEP 440 subset to setup-python's semver."""
+    if re.fullmatch(r'\d+(?:\.\d+){0,2}', value):
+        return value
+    alternatives = ['']
+    for clause in value.split(','):
+        m = re.fullmatch(r'\s*(>=|<=|==|!=|~=|>|<)\s*(\d+(?:\.\d+){0,2})(\.\*)?\s*', clause)
+        require(m, f'Unsupported Python constraint: {value}')
+        op, numeric, wildcard = m.groups()
+        parts = list(map(int, numeric.split('.')))
+        padded = parts + [0] * (3 - len(parts))
+        exact = '.'.join(map(str, padded))
+        if wildcard:
+            require(op in {'==', '!='}, 'Python wildcards require == or !=')
+            upper = parts[:]
+            upper[-1] += 1
+            upper += [0] * (3 - len(upper))
+            high = '.'.join(map(str, upper))
+            choices = [f'>={exact} <{high}'] if op == '==' else [f'<{exact}', f'>={high}']
+        elif op == '~=':
+            require(len(parts) >= 2, 'Compatible Python ranges need at least major.minor')
+            upper = parts[:-1]
+            upper[-1] += 1
+            upper += [0] * (3 - len(upper))
+            choices = [f'>={exact} <' + '.'.join(map(str, upper))]
+        elif op == '!=':
+            choices = [f'<{exact}', f'>{exact}']
+        else:
+            choices = [('=' if op == '==' else op) + exact]
+        alternatives = [(prefix + ' ' + choice).strip() for prefix in alternatives for choice in choices]
+        require(len(alternatives) <= 16, 'Python version exclusions are too complex; pin .python-version')
+    return ' || '.join(alternatives)
+
+
 def patterns_match(directory, patterns):
     included = False
     for pattern in patterns:
@@ -296,7 +330,7 @@ def discover(root, overrides=None):
         for name in selected_groups:
             selected_deps.extend(group_deps(name, set()))
         tools = dep_names(selected_deps)
-        plan['python'] = {'version': selected, 'requires': requires, 'uv': 'uv.lock' in names,
+        plan['python'] = {'version': selected, 'setup_version': python_setup_range(selected), 'requires': requires, 'uv': 'uv.lock' in names,
                           'selection': selection, 'tools': sorted(tools)}
         plan['notes'].append(f'Python selection: {selected}; ' + ('PEP 735 ci group only' if selection else 'project + uv default groups, no extras'))
         plan['notes'].append('Python package build/install NOT RUN automatically; source checks do not certify a wheel')
@@ -531,7 +565,7 @@ def main():
         plan = discover(root.resolve(), json.loads(os.environ.get('CI_OVERRIDES', '{}')))
         plan_file.write_text(json.dumps(plan, indent=2) + '\n')
         node, python = plan['node'], plan['python']
-        outputs = {'node-version': node['version'] if node else '', 'python-version': python['version'] if python else '',
+        outputs = {'node-version': node['version'] if node else '', 'python-version': python['setup_version'] if python else '',
                    'uv': str(bool(python and python['uv'])).lower(), 'node-lock': str(bool(node and node['lock'])).lower(),
                    'node-manager': (node['manager'] + '-' + (node['manager_version'] or 'bundled')) if node else '',
                    'lock-key': hashlib.sha256(json.dumps(plan['locks'], sort_keys=True).encode()).hexdigest()}
