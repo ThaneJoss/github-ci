@@ -1,0 +1,58 @@
+# STATIC INTEGRATION EXAMPLE: replace the 40 zeroes with the published, reviewed template commit SHA.
+# Copy as .github/workflows/ci.yml and adjust branch, runtime, lockfile and repository scripts.
+# Configure only the unique required check name Gate after a successful real GitHub run.
+# No event-level path filters; no secrets inheritance; do not conditionally skip jobs.ci.
+# Vue example: define typecheck as vue-tsc --noEmit (or vue-tsc -b for project references).
+# Add browser-command only when the repository has a fast smoke/a11y test and local browser install.
+name: CI
+'on':
+  pull_request: {}
+  push:
+    branches:
+    - main
+  workflow_dispatch: {}
+  merge_group:
+    types:
+    - checks_requested
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  ci:
+    name: CI
+    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@0000000000000000000000000000000000000000
+    with:
+      profile: node
+      node-version: '22'
+      package-manager: npm
+      lockfile: package-lock.json
+      lint-command: npm run lint
+      typecheck-command: npm run typecheck
+      test-command: npm run test:unit
+      build-command: npm run build
+      integration-command: npm run test:integration
+  gate:
+    name: Gate
+    if: ${{ always() }}
+    needs:
+    - ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+    - name: Require successful quality completion
+      env:
+        CI_RESULT: ${{ needs.ci.result }}
+        QUALITY_PASSED: ${{ needs.ci.outputs.quality-passed }}
+      run: |
+        if [[ "$CI_RESULT" != success || "$QUALITY_PASSED" != true ]]; then
+          printf 'Quality gate failed: result=%s completed=%s\n' "$CI_RESULT" "$QUALITY_PASSED" >&2
+          exit 1
+        fi
+        printf 'Quality gate passed.\n'
+    - name: Reject a cancelled run
+      if: ${{ cancelled() }}
+      run: |
+        exit 1

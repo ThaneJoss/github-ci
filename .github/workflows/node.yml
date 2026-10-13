@@ -1,0 +1,322 @@
+# One selected Quality job: checkout/install once, run applicable checks sequentially.
+name: Reusable Node quality
+'on':
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Repository-relative directory; use repository root for a workspace lockfile.
+        type: string
+        default: .
+      timeout-minutes:
+        description: Maximum duration of the selected Quality job; integer from 1 to 45.
+        type: number
+        default: 15
+      artifact-key:
+        description: Unique safe slug per reusable invocation in the same run.
+        type: string
+        default: quality
+      node-version:
+        description: Node version accepted by setup-node; match package engines.
+        type: string
+        default: '22'
+      package-manager:
+        description: Exactly npm or pnpm.
+        type: string
+        default: npm
+      package-manager-version:
+        description: Exact x.y.z; required for pnpm, empty uses the npm bundled with Node.
+        type: string
+        default: ''
+      lockfile:
+        description: Lockfile relative to working-directory; must be committed.
+        type: string
+        required: true
+      lint-command:
+        description: Repository command for lint; empty means this check is not applicable.
+        type: string
+        default: ''
+      typecheck-command:
+        description: Real typecheck command; Vue projects should invoke vue-tsc.
+        type: string
+        default: ''
+      test-command:
+        description: Fast unit tests using local fixtures; empty means not applicable.
+        type: string
+        default: ''
+      build-command:
+        description: Production bundle or wheel build command; no deployment.
+        type: string
+        default: ''
+      integration-command:
+        description: Small CPU/local integration or CLI smoke command; no large downloads.
+        type: string
+        default: ''
+      browser-command:
+        description: Optional targeted browser smoke/accessibility command; use local tools.
+        type: string
+        default: ''
+      audit-command:
+        description: Auditable vulnerability gate. Empty runs package-manager audit at high severity.
+        type: string
+        default: ''
+    outputs:
+      quality-passed:
+        description: String true only after the selected Quality job completes every configured check.
+        value: ${{ jobs.quality.outputs.quality-passed }}
+permissions:
+  contents: read
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: 'true'
+      npm_config_manage_package_manager_versions: 'false'
+      npm_config_fetch_retries: '1'
+      npm_config_fetch_retry_mintimeout: '1000'
+      npm_config_fetch_retry_maxtimeout: '10000'
+    outputs:
+      quality-passed: ${{ steps.complete.outputs.quality-passed }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; verified 2026-10-13
+      with:
+        persist-credentials: false
+    - name: Validate configuration and committed lockfile
+      id: config
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        JOB_TIMEOUT: ${{ inputs.timeout-minutes }}
+        ARTIFACT_KEY: ${{ inputs.artifact-key }}
+        LOCKFILE: ${{ inputs.lockfile }}
+        LINT_COMMAND: ${{ inputs.lint-command }}
+        TYPECHECK_COMMAND: ${{ inputs.typecheck-command }}
+        TEST_COMMAND: ${{ inputs.test-command }}
+        BUILD_COMMAND: ${{ inputs.build-command }}
+        INTEGRATION_COMMAND: ${{ inputs.integration-command }}
+        BROWSER_COMMAND: ${{ inputs.browser-command }}
+        PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        PACKAGE_MANAGER_VERSION: ${{ inputs.package-manager-version }}
+      run: |
+        python3 - <<'PY'
+        import os, re
+        from pathlib import Path
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", os.environ["ARTIFACT_KEY"]):
+            raise SystemExit("artifact-key must be a safe 1-64 character slug, unique per invocation")
+        root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+        relative = os.environ["WORKING_DIRECTORY"]
+        if not re.fullmatch(r"[\w./ -]+", relative) or Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise SystemExit("working-directory must be a simple repository-relative directory without '..'")
+        working = (root / relative).resolve()
+        if not working.is_relative_to(root) or not working.is_dir():
+            raise SystemExit("working-directory must resolve inside this checkout")
+        try:
+            timeout = float(os.environ["JOB_TIMEOUT"])
+            if not timeout.is_integer() or not 1 <= timeout <= 45:
+                raise ValueError()
+        except ValueError:
+            raise SystemExit("timeout-minutes must be an integer from 1 to 45")
+        import subprocess
+        lock = os.environ["LOCKFILE"]
+        if not re.fullmatch(r"[\w./ -]+", lock) or Path(lock).is_absolute() or ".." in Path(lock).parts:
+            raise SystemExit("lockfile must be a nonempty relative path without '..'")
+        lockpath = (working / lock).resolve()
+        if not lockpath.is_relative_to(working) or not lockpath.is_file():
+            raise SystemExit("lockfile must exist inside working-directory")
+        subprocess.run(["git", "--literal-pathspecs", "ls-files", "--error-unmatch", "--", str(lockpath.relative_to(root))], cwd=root, check=True, stdout=subprocess.DEVNULL)
+        if not any(os.environ[name].strip() for name in ("LINT_COMMAND", "TYPECHECK_COMMAND", "TEST_COMMAND", "BUILD_COMMAND", "INTEGRATION_COMMAND", "BROWSER_COMMAND")):
+            raise SystemExit("Configure at least one applicable quality command; audit alone is insufficient")
+        import re
+        manager = os.environ["PACKAGE_MANAGER"]
+        if manager not in {"npm", "pnpm"}:
+            raise SystemExit("package-manager must be npm or pnpm")
+        expected = {"npm": {"package-lock.json", "npm-shrinkwrap.json"}, "pnpm": {"pnpm-lock.yaml"}}
+        if Path(lock).name not in expected[manager] or Path(lock).parent != Path("."):
+            raise SystemExit("Use the lockfile in working-directory; for monorepos, use the workspace root")
+        version = os.environ["PACKAGE_MANAGER_VERSION"]
+        if version and not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+            raise SystemExit("package-manager-version must be an exact stable x.y.z version")
+        if manager == "pnpm" and not version:
+            raise SystemExit("pnpm requires an explicit package-manager-version")
+        if not (working / "package.json").is_file():
+            raise SystemExit("package.json missing in working-directory")
+        import json
+        declaration = json.loads((working / "package.json").read_text()).get("packageManager", "")
+        if declaration:
+            declared = re.fullmatch(r"(npm|pnpm)@([0-9]+\.[0-9]+\.[0-9]+)(?:\+[^\s]+)?", declaration)
+            if not declared or declared[1] != manager:
+                raise SystemExit("packageManager declaration must match the selected npm/pnpm manager and use an exact version")
+            if version and declared[2] != version:
+                raise SystemExit("package-manager-version conflicts with package.json packageManager")
+        PY
+    - name: Set up Node
+      id: node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0; verified 2026-10-13
+      with:
+        node-version: ${{ inputs.node-version }}
+        package-manager-cache: false
+    - name: Select pinned package manager
+      id: pm
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        PACKAGE_MANAGER_VERSION: ${{ inputs.package-manager-version }}
+      run: |
+        # Retry only recognizable network failures, at most once; never rerun quality assertions.
+        retry_install() {
+          local attempt status log
+          log="$(mktemp)"
+          for attempt in 1 2; do
+            if "$@" 2>&1 | tee "$log"; then
+              rm -f "$log"
+              return 0
+            else
+              status=$?
+            fi
+            if [[ "$attempt" == 2 ]] || ! grep -Eiq 'ETIMEDOUT|ECONNRESET|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ReadTimeoutError|ConnectTimeout|Temporary failure|Connection reset|502 Bad Gateway|503 Service' "$log"; then
+              rm -f "$log"
+              return "$status"
+            fi
+            sleep 3
+          done
+        }
+        if [[ -n "$PACKAGE_MANAGER_VERSION" ]]; then
+          retry_install npm install --global --ignore-scripts --no-audit --no-fund "$PACKAGE_MANAGER@$PACKAGE_MANAGER_VERSION"
+        fi
+        actual_version="$("$PACKAGE_MANAGER" --version)"
+        if [[ -n "$PACKAGE_MANAGER_VERSION" && "$actual_version" != "$PACKAGE_MANAGER_VERSION" ]]; then
+          printf 'Expected package manager version %s, got %s\n' "$PACKAGE_MANAGER_VERSION" "$actual_version" >&2
+          exit 1
+        fi
+        ACTUAL_PACKAGE_MANAGER_VERSION="$actual_version" python3 - <<'PY_PM'
+        import json, os, re
+        value = json.load(open("package.json")).get("packageManager", "")
+        if value:
+            declared = re.fullmatch(r"(npm|pnpm)@([0-9]+\.[0-9]+\.[0-9]+)(?:\+[^\s]+)?", value)
+            if not declared or declared[2] != os.environ["ACTUAL_PACKAGE_MANAGER_VERSION"]:
+                raise SystemExit("Actual package manager differs from package.json; set package-manager-version explicitly")
+        PY_PM
+        printf 'version=%s\n' "$actual_version" >> "$GITHUB_OUTPUT"
+        if [[ "$PACKAGE_MANAGER" == pnpm ]]; then
+          printf 'cache-path=%s\n' "$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        else
+          printf 'cache-path=%s\n' "$(npm config get cache)" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Cache package download store
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; verified 2026-10-13
+      with:
+        path: ${{ steps.pm.outputs.cache-path }}
+        key: ${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ inputs.package-manager
+          }}-${{ steps.pm.outputs.version }}-${{ hashFiles(format('{0}/{1}', inputs.working-directory, inputs.lockfile))
+          }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ inputs.package-manager }}-${{ steps.pm.outputs.version }}-
+    - name: Install exactly from lockfile
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        LOCKFILE: ${{ inputs.lockfile }}
+      run: |
+        # Retry only recognizable network failures, at most once; never rerun quality assertions.
+        retry_install() {
+          local attempt status log
+          log="$(mktemp)"
+          for attempt in 1 2; do
+            if "$@" 2>&1 | tee "$log"; then
+              rm -f "$log"
+              return 0
+            else
+              status=$?
+            fi
+            if [[ "$attempt" == 2 ]] || ! grep -Eiq 'ETIMEDOUT|ECONNRESET|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ReadTimeoutError|ConnectTimeout|Temporary failure|Connection reset|502 Bad Gateway|503 Service' "$log"; then
+              rm -f "$log"
+              return "$status"
+            fi
+            sleep 3
+          done
+        }
+        if [[ "$PACKAGE_MANAGER" == pnpm ]]; then
+          retry_install pnpm install --frozen-lockfile --prefer-offline
+        else
+          retry_install npm ci --no-audit --no-fund --prefer-offline
+        fi
+        git --literal-pathspecs diff --exit-code -- "$LOCKFILE"
+    - name: Lint
+      if: ${{ inputs.lint-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.lint-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Typecheck
+      if: ${{ inputs.typecheck-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.typecheck-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Unit tests
+      if: ${{ inputs.test-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.test-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Build
+      if: ${{ inputs.build-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.build-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Light integration
+      if: ${{ inputs.integration-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.integration-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Browser smoke / accessibility
+      if: ${{ inputs.browser-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.browser-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Dependency vulnerability gate
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AUDIT_COMMAND: ${{ inputs.audit-command }}
+        PACKAGE_MANAGER: ${{ inputs.package-manager }}
+      run: |
+        if [[ -n "$AUDIT_COMMAND" ]]; then
+          bash -e -o pipefail -c "$AUDIT_COMMAND"
+        else
+          "$PACKAGE_MANAGER" audit --audit-level=high
+        fi
+    - name: Record successful completion
+      id: complete
+      run: |
+        echo "quality-passed=true" >> "$GITHUB_OUTPUT"
+    - name: Upload known failure reports
+      if: ${{ failure() && steps.config.outcome == 'success' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; verified 2026-10-13
+      with:
+        name: node-${{ inputs.artifact-key }}-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ inputs.working-directory }}/ci-reports/
+          ${{ inputs.working-directory }}/coverage/
+          ${{ inputs.working-directory }}/test-results/
+          ${{ inputs.working-directory }}/playwright-report/
+          !**/.env
+          !**/.env.*
+          !**/.git/**
+          !**/node_modules/**
+          !**/.venv-ci/**
+          !**/*credentials*
+        if-no-files-found: ignore
+        retention-days: 7
+        include-hidden-files: false

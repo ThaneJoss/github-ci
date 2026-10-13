@@ -1,0 +1,118 @@
+# Content/plugin profile: no dependency installation; optional Node only for dependency-free code.
+name: Reusable content quality
+'on':
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Repository-relative directory; use repository root for a workspace lockfile.
+        type: string
+        default: .
+      timeout-minutes:
+        description: Maximum duration of the selected Quality job; integer from 1 to 45.
+        type: number
+        default: 15
+      artifact-key:
+        description: Unique safe slug per reusable invocation in the same run.
+        type: string
+        default: quality
+      lightweight-node-version:
+        description: Optional pinned Node runtime for a dependency-free plugin; empty for pure content.
+        type: string
+        default: ''
+      docs-command:
+        description: Required meaningful offline content/manifest/link validation; no fabricated tests.
+        type: string
+        required: true
+    outputs:
+      quality-passed:
+        description: String true only after the selected Quality job completes every configured check.
+        value: ${{ jobs.quality.outputs.quality-passed }}
+permissions:
+  contents: read
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: 'true'
+    outputs:
+      quality-passed: ${{ steps.complete.outputs.quality-passed }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; verified 2026-10-13
+      with:
+        persist-credentials: false
+    - name: Validate meaningful content check
+      id: config
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        JOB_TIMEOUT: ${{ inputs.timeout-minutes }}
+        ARTIFACT_KEY: ${{ inputs.artifact-key }}
+        DOCS_COMMAND: ${{ inputs.docs-command }}
+        LIGHTWEIGHT_NODE_VERSION: ${{ inputs.lightweight-node-version }}
+      run: |
+        python3 - <<'PY'
+        import os, re
+        from pathlib import Path
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", os.environ["ARTIFACT_KEY"]):
+            raise SystemExit("artifact-key must be a safe 1-64 character slug, unique per invocation")
+        root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+        relative = os.environ["WORKING_DIRECTORY"]
+        if not re.fullmatch(r"[\w./ -]+", relative) or Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise SystemExit("working-directory must be a simple repository-relative directory without '..'")
+        working = (root / relative).resolve()
+        if not working.is_relative_to(root) or not working.is_dir():
+            raise SystemExit("working-directory must resolve inside this checkout")
+        try:
+            timeout = float(os.environ["JOB_TIMEOUT"])
+            if not timeout.is_integer() or not 1 <= timeout <= 45:
+                raise ValueError()
+        except ValueError:
+            raise SystemExit("timeout-minutes must be an integer from 1 to 45")
+        if not os.environ["DOCS_COMMAND"].strip():
+            raise SystemExit("Configure a meaningful content check, or omit CI for a content-free repository")
+        if os.environ["LIGHTWEIGHT_NODE_VERSION"] and (working / "package.json").exists():
+            import json
+            package = json.loads((working / "package.json").read_text())
+            if any(package.get(key) for key in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")):
+                raise SystemExit("Lightweight Node profile requires zero dependency declarations; use the Node lock/audit profile")
+        PY
+    - name: Set up optional dependency-free Node runtime
+      if: ${{ inputs.lightweight-node-version != '' }}
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0; verified 2026-10-13
+      with:
+        node-version: ${{ inputs.lightweight-node-version }}
+        package-manager-cache: false
+    - name: Offline content / manifest validation
+      if: ${{ inputs.docs-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.docs-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Record successful completion
+      id: complete
+      run: |
+        echo "quality-passed=true" >> "$GITHUB_OUTPUT"
+    - name: Upload known failure reports
+      if: ${{ failure() && steps.config.outcome == 'success' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; verified 2026-10-13
+      with:
+        name: docs-${{ inputs.artifact-key }}-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ inputs.working-directory }}/ci-reports/
+          ${{ inputs.working-directory }}/coverage/
+          ${{ inputs.working-directory }}/test-results/
+          ${{ inputs.working-directory }}/playwright-report/
+          !**/.env
+          !**/.env.*
+          !**/.git/**
+          !**/node_modules/**
+          !**/.venv-ci/**
+          !**/*credentials*
+        if-no-files-found: ignore
+        retention-days: 7
+        include-hidden-files: false

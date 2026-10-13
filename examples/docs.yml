@@ -1,0 +1,53 @@
+# STATIC INTEGRATION EXAMPLE: replace the 40 zeroes with the published, reviewed template commit SHA.
+# Copy as .github/workflows/ci.yml and adjust branch, runtime, lockfile and repository scripts.
+# Configure only the unique required check name Gate after a successful real GitHub run.
+# No event-level path filters; no secrets inheritance; do not conditionally skip jobs.ci.
+# Copy examples/helpers/check_docs.py to .github/scripts/check_docs.py; adjust the explicit paths.
+# For an Obsidian/plugin manifest, supply the repository-specific validator instead.
+# An empty or retired repository should omit a workflow until it has something useful to validate.
+name: CI
+'on':
+  pull_request: {}
+  push:
+    branches:
+    - main
+  workflow_dispatch: {}
+  merge_group:
+    types:
+    - checks_requested
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  ci:
+    name: CI
+    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@0000000000000000000000000000000000000000
+    with:
+      profile: docs
+      timeout-minutes: 5
+      docs-command: python3 .github/scripts/check_docs.py README.md docs
+  gate:
+    name: Gate
+    if: ${{ always() }}
+    needs:
+    - ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+    - name: Require successful quality completion
+      env:
+        CI_RESULT: ${{ needs.ci.result }}
+        QUALITY_PASSED: ${{ needs.ci.outputs.quality-passed }}
+      run: |
+        if [[ "$CI_RESULT" != success || "$QUALITY_PASSED" != true ]]; then
+          printf 'Quality gate failed: result=%s completed=%s\n' "$CI_RESULT" "$QUALITY_PASSED" >&2
+          exit 1
+        fi
+        printf 'Quality gate passed.\n'
+    - name: Reject a cancelled run
+      if: ${{ cancelled() }}
+      run: |
+        exit 1

@@ -1,0 +1,148 @@
+# Public reusable entry point. No event trigger, deployment, or secrets.
+# Nested local workflows resolve from the same commit as this file.
+name: Reusable CI
+'on':
+  workflow_call:
+    inputs:
+      profile:
+        description: Exactly node, python or docs.
+        type: string
+        required: true
+      working-directory:
+        description: Repository-relative directory; use repository root for a workspace lockfile.
+        type: string
+        default: .
+      timeout-minutes:
+        description: Maximum duration of the selected Quality job; integer from 1 to 45.
+        type: number
+        default: 15
+      artifact-key:
+        description: Unique safe slug per reusable invocation in the same run.
+        type: string
+        default: quality
+      node-version:
+        description: Node version accepted by setup-node; match package engines.
+        type: string
+        default: '22'
+      package-manager:
+        description: Exactly npm or pnpm.
+        type: string
+        default: npm
+      package-manager-version:
+        description: Exact x.y.z; required for pnpm, empty uses the npm bundled with Node.
+        type: string
+        default: ''
+      lockfile:
+        description: Node lockfile or Python hash-pinned CPU requirements file, relative to working-directory.
+        type: string
+        default: ''
+      lint-command:
+        description: Repository command for lint; empty means this check is not applicable.
+        type: string
+        default: ''
+      typecheck-command:
+        description: Real typecheck command; Vue projects should invoke vue-tsc.
+        type: string
+        default: ''
+      test-command:
+        description: Fast unit tests using local fixtures; empty means not applicable.
+        type: string
+        default: ''
+      build-command:
+        description: Production bundle or wheel build command; no deployment.
+        type: string
+        default: ''
+      integration-command:
+        description: Small CPU/local integration or CLI smoke command; no large downloads.
+        type: string
+        default: ''
+      browser-command:
+        description: Optional targeted browser smoke/accessibility command; use local tools.
+        type: string
+        default: ''
+      audit-command:
+        description: Auditable vulnerability gate. Empty runs package-manager audit at high severity.
+        type: string
+        default: ''
+      python-version:
+        description: Python version accepted by setup-python.
+        type: string
+        default: '3.11'
+      project-install-command:
+        description: Optional local project install; use --no-deps --no-build-isolation.
+        type: string
+        default: ''
+      lightweight-node-version:
+        description: Optional pinned Node runtime for a dependency-free plugin; empty for pure content.
+        type: string
+        default: ''
+      docs-command:
+        description: Offline content/manifest/link validation for docs profile.
+        type: string
+        default: ''
+    outputs:
+      quality-passed:
+        description: String true only after the selected profile passes; callers must also require job result success.
+        value: ${{ jobs.node.outputs.quality-passed || jobs.python.outputs.quality-passed || jobs.docs.outputs.quality-passed
+          }}
+permissions:
+  contents: read
+jobs:
+  node:
+    name: Node
+    if: ${{ inputs.profile == 'node' }}
+    uses: ./.github/workflows/node.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
+      artifact-key: ${{ inputs.artifact-key }}
+      node-version: ${{ inputs.node-version }}
+      package-manager: ${{ inputs.package-manager }}
+      package-manager-version: ${{ inputs.package-manager-version }}
+      lockfile: ${{ inputs.lockfile }}
+      lint-command: ${{ inputs.lint-command }}
+      typecheck-command: ${{ inputs.typecheck-command }}
+      test-command: ${{ inputs.test-command }}
+      build-command: ${{ inputs.build-command }}
+      integration-command: ${{ inputs.integration-command }}
+      browser-command: ${{ inputs.browser-command }}
+      audit-command: ${{ inputs.audit-command }}
+  python:
+    name: Python
+    if: ${{ inputs.profile == 'python' }}
+    uses: ./.github/workflows/python.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
+      artifact-key: ${{ inputs.artifact-key }}
+      python-version: ${{ inputs.python-version }}
+      lockfile: ${{ inputs.lockfile }}
+      project-install-command: ${{ inputs.project-install-command }}
+      lint-command: ${{ inputs.lint-command }}
+      typecheck-command: ${{ inputs.typecheck-command }}
+      test-command: ${{ inputs.test-command }}
+      build-command: ${{ inputs.build-command }}
+      integration-command: ${{ inputs.integration-command }}
+      audit-command: ${{ inputs.audit-command }}
+  docs:
+    name: Docs
+    if: ${{ inputs.profile == 'docs' }}
+    uses: ./.github/workflows/docs.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
+      artifact-key: ${{ inputs.artifact-key }}
+      lightweight-node-version: ${{ inputs.lightweight-node-version }}
+      docs-command: ${{ inputs.docs-command }}
+  invalid-profile:
+    name: Reject invalid profile
+    if: ${{ !contains(fromJSON('["node","python","docs"]'), inputs.profile) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+    - name: Reject unsupported configuration
+      env:
+        PROFILE: ${{ inputs.profile }}
+      run: |
+        printf 'Unsupported CI profile: %s\n' "$PROFILE" >&2
+        exit 1

@@ -1,0 +1,75 @@
+name: Template validation
+'on':
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: template-validation-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  checks:
+    name: Template checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install locked YAML parser
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r tools/requirements-ci.txt
+      - name: Install checksum-verified actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/actionlint"
+          curl --fail --show-error --location --retry 1 --connect-timeout 15 --max-time 120 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/actionlint/archive.tar.gz"
+          printf '%s  %s\n' '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8' "$RUNNER_TEMP/actionlint/archive.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/actionlint/archive.tar.gz" -C "$RUNNER_TEMP/actionlint" actionlint
+          printf '%s\n' "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
+      - name: Validate workflow syntax and quality gate truth table
+        run: |
+          actionlint -no-color -shellcheck='' .github/workflows/*.yml examples/*.yml
+          python tools/validate.py
+      - name: Test audit and content helpers
+        run: python tools/test_helpers.py
+      - name: Check identity-free capability contract
+        run: |
+          python tools/check_portability.py
+          python tools/test_portability.py
+  docs-smoke:
+    name: Reusable docs smoke
+    uses: ./.github/workflows/ci.yml
+    with:
+      profile: docs
+      timeout-minutes: 5
+      docs-command: python3 examples/helpers/check_docs.py README.md docs
+  gate:
+    name: Gate
+    if: ${{ always() }}
+    needs: [checks, docs-smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require validation and reusable workflow completion
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          DOCS_RESULT: ${{ needs.docs-smoke.result }}
+          DOCS_PASSED: ${{ needs.docs-smoke.outputs.quality-passed }}
+        run: |
+          if [[ "$CHECKS_RESULT" != success || "$DOCS_RESULT" != success || "$DOCS_PASSED" != true ]]; then
+            printf 'Template validation failed: checks=%s docs=%s completed=%s\n' "$CHECKS_RESULT" "$DOCS_RESULT" "$DOCS_PASSED" >&2
+            exit 1
+          fi
+      - name: Reject a cancelled run
+        if: ${{ cancelled() }}
+        run: exit 1

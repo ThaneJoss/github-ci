@@ -1,0 +1,59 @@
+# STATIC INTEGRATION EXAMPLE: replace the 40 zeroes with the published, reviewed template commit SHA.
+# Copy as .github/workflows/ci.yml and adjust branch, runtime, lockfile and repository scripts.
+# Configure only the unique required check name Gate after a successful real GitHub run.
+# No event-level path filters; no secrets inheritance; do not conditionally skip jobs.ci.
+# Hash-lock all transitive CPU dependencies and tools (ruff/pytest/build/pip-audit/build backend).
+# Define markers and keep tiny fixtures local; write wheel/CLI smoke for the actual package.
+# If this is not a package, omit project install, wheel build and CLI smoke rather than inventing them.
+name: CI
+'on':
+  pull_request: {}
+  push:
+    branches:
+    - main
+  workflow_dispatch: {}
+  merge_group:
+    types:
+    - checks_requested
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  ci:
+    name: CI
+    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@0000000000000000000000000000000000000000
+    with:
+      profile: python
+      python-version: '3.11'
+      lockfile: requirements-ci.lock
+      project-install-command: python -m pip install --no-deps --no-build-isolation -e .
+      lint-command: python -m ruff check .
+      test-command: python -m pytest -q -m "not gpu and not slow and not downloads" --junitxml=ci-reports/junit.xml
+      build-command: python -m build --wheel --no-isolation
+      integration-command: python scripts/check_wheel_and_cli.py
+      audit-command: python -m pip_audit --require-hashes --strict --progress-spinner=off -r requirements-ci.lock
+  gate:
+    name: Gate
+    if: ${{ always() }}
+    needs:
+    - ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+    - name: Require successful quality completion
+      env:
+        CI_RESULT: ${{ needs.ci.result }}
+        QUALITY_PASSED: ${{ needs.ci.outputs.quality-passed }}
+      run: |
+        if [[ "$CI_RESULT" != success || "$QUALITY_PASSED" != true ]]; then
+          printf 'Quality gate failed: result=%s completed=%s\n' "$CI_RESULT" "$QUALITY_PASSED" >&2
+          exit 1
+        fi
+        printf 'Quality gate passed.\n'
+    - name: Reject a cancelled run
+      if: ${{ cancelled() }}
+      run: |
+        exit 1

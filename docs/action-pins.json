@@ -1,0 +1,203 @@
+{
+  "checked_at_utc": "2026-10-13T03:14:58.536824+00:00",
+  "method": "Read-only gh api releases/latest then git/ref/tags; annotated tags dereferenced to commit. Latest is a point-in-time candidate, not runtime compatibility certification.",
+  "actions": [
+    {
+      "repository": "actions/checkout",
+      "tag": "v7.0.1",
+      "commit_sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "object_type": "commit",
+      "published_at": "2026-07-20T15:10:05Z",
+      "release_url": "https://github.com/actions/checkout/releases/tag/v7.0.1",
+      "tag_ref_api": "https://api.github.com/repos/actions/checkout/git/ref/tags/v7.0.1",
+      "commit_url": "https://github.com/actions/checkout/commit/3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "resolution_chain": [
+        {
+          "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "type": "commit",
+          "url": "https://api.github.com/repos/actions/checkout/git/commits/3d3c42e5aac5ba805825da76410c181273ba90b1"
+        }
+      ],
+      "action_yml_url": "https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/action.yml",
+      "runs_using": "node24",
+      "readme_url": "https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/README.md",
+      "runtime_notes_source_lines": [
+        24,
+        25,
+        169,
+        343,
+        367
+      ],
+      "runtime_notes": "Node 24 action runtime; README states minimum Actions Runner 2.327.1."
+    },
+    {
+      "repository": "actions/setup-node",
+      "tag": "v7.1.0",
+      "commit_sha": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+      "object_type": "commit",
+      "published_at": "2026-10-08T02:52:34Z",
+      "release_url": "https://github.com/actions/setup-node/releases/tag/v7.1.0",
+      "tag_ref_api": "https://api.github.com/repos/actions/setup-node/git/ref/tags/v7.1.0",
+      "commit_url": "https://github.com/actions/setup-node/commit/949feb2413d6458794dcd2491c4babbbce0c15c1",
+      "resolution_chain": [
+        {
+          "sha": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+          "type": "commit",
+          "url": "https://api.github.com/repos/actions/setup-node/git/commits/949feb2413d6458794dcd2491c4babbbce0c15c1"
+        }
+      ],
+      "action_yml_url": "https://github.com/actions/setup-node/blob/949feb2413d6458794dcd2491c4babbbce0c15c1/action.yml",
+      "runs_using": "node24",
+      "readme_url": "https://github.com/actions/setup-node/blob/949feb2413d6458794dcd2491c4babbbce0c15c1/README.md",
+      "runtime_notes_source_lines": [
+        34,
+        69,
+        234,
+        236,
+        248
+      ],
+      "runtime_notes": "Node 24 action runtime; GHES and restricted-network installation need separate validation."
+    },
+    {
+      "repository": "actions/setup-python",
+      "tag": "v7.0.0",
+      "commit_sha": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+      "object_type": "commit",
+      "published_at": "2026-07-20T03:15:01Z",
+      "release_url": "https://github.com/actions/setup-python/releases/tag/v7.0.0",
+      "tag_ref_api": "https://api.github.com/repos/actions/setup-python/git/ref/tags/v7.0.0",
+      "commit_url": "https://github.com/actions/setup-python/commit/5fda3b95a4ea91299a34e894583c3862153e4b97",
+      "resolution_chain": [
+        {
+          "sha": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+          "type": "commit",
+          "url": "https://api.github.com/repos/actions/setup-python/git/commits/5fda3b95a4ea91299a34e894583c3862153e4b97"
+        }
+      ],
+      "action_yml_url": "https://github.com/actions/setup-python/blob/5fda3b95a4ea91299a34e894583c3862153e4b97/action.yml",
+      "runs_using": "node24",
+      "readme_url": "https://github.com/actions/setup-python/blob/5fda3b95a4ea91299a34e894583c3862153e4b97/README.md",
+      "runtime_notes_source_lines": [
+        20,
+        121,
+        122
+      ],
+      "runtime_notes": "Node 24 action runtime; self-hosted and GHES usage documented separately."
+    },
+    {
+      "repository": "actions/upload-artifact",
+      "tag": "v7.0.2",
+      "commit_sha": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      "object_type": "commit",
+      "published_at": "2026-10-07T10:08:14Z",
+      "release_url": "https://github.com/actions/upload-artifact/releases/tag/v7.0.2",
+      "tag_ref_api": "https://api.github.com/repos/actions/upload-artifact/git/ref/tags/v7.0.2",
+      "commit_url": "https://github.com/actions/upload-artifact/commit/cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      "resolution_chain": [
+        {
+          "sha": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+          "type": "commit",
+          "url": "https://api.github.com/repos/actions/upload-artifact/git/commits/cf430e030ddbb5b0abf93d22962f4752f3646cd9"
+        }
+      ],
+      "action_yml_url": "https://github.com/actions/upload-artifact/blob/cf430e030ddbb5b0abf93d22962f4752f3646cd9/action.yml",
+      "runs_using": "node24",
+      "readme_url": "https://github.com/actions/upload-artifact/blob/cf430e030ddbb5b0abf93d22962f4752f3646cd9/README.md",
+      "runtime_notes_source_lines": [
+        7,
+        15,
+        61,
+        63
+      ],
+      "runtime_notes": "Node 24 action runtime; upstream states v4 and newer are unsupported on GHES."
+    },
+    {
+      "repository": "actions/cache",
+      "tag": "v6.1.0",
+      "commit_sha": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+      "object_type": "commit",
+      "published_at": "2026-06-26T19:17:06Z",
+      "release_url": "https://github.com/actions/cache/releases/tag/v6.1.0",
+      "tag_ref_api": "https://api.github.com/repos/actions/cache/git/ref/tags/v6.1.0",
+      "commit_url": "https://github.com/actions/cache/commit/55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+      "resolution_chain": [
+        {
+          "sha": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+          "type": "commit",
+          "url": "https://api.github.com/repos/actions/cache/git/commits/55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+        }
+      ],
+      "action_yml_url": "https://github.com/actions/cache/blob/55cc8345863c7cc4c66a329aec7e433d2d1c52a9/action.yml",
+      "runs_using": "node24",
+      "readme_url": "https://github.com/actions/cache/blob/55cc8345863c7cc4c66a329aec7e433d2d1c52a9/README.md",
+      "runtime_notes_source_lines": [
+        21,
+        22,
+        36,
+        37,
+        48,
+        49,
+        59,
+        61,
+        86,
+        88
+      ],
+      "runtime_notes": "Node 24 action runtime; README states minimum Actions Runner 2.327.1 for this runtime."
+    },
+    {
+      "repository": "pnpm/action-setup",
+      "tag": "v6.1.0",
+      "commit_sha": "ea17c68df8912ef543352723c149a84f56e3d413",
+      "object_type": "commit",
+      "published_at": "2026-09-05T07:31:28Z",
+      "release_url": "https://github.com/pnpm/action-setup/releases/tag/v6.1.0",
+      "tag_ref_api": "https://api.github.com/repos/pnpm/action-setup/git/ref/tags/v6.1.0",
+      "commit_url": "https://github.com/pnpm/action-setup/commit/ea17c68df8912ef543352723c149a84f56e3d413",
+      "resolution_chain": [
+        {
+          "sha": "d9184bf108216479bc5a137cc391f4d7b14c870b",
+          "type": "tag",
+          "url": "https://api.github.com/repos/pnpm/action-setup/git/tags/d9184bf108216479bc5a137cc391f4d7b14c870b"
+        },
+        {
+          "sha": "ea17c68df8912ef543352723c149a84f56e3d413",
+          "type": "commit",
+          "url": "https://api.github.com/repos/pnpm/action-setup/git/commits/ea17c68df8912ef543352723c149a84f56e3d413"
+        }
+      ],
+      "action_yml_url": "https://github.com/pnpm/action-setup/blob/ea17c68df8912ef543352723c149a84f56e3d413/action.yml",
+      "runs_using": "node24",
+      "readme_url": "https://github.com/pnpm/action-setup/blob/ea17c68df8912ef543352723c149a84f56e3d413/README.md",
+      "runtime_notes_source_lines": [],
+      "runtime_notes": "Node 24 action runtime; inspect chosen pnpm version and packageManager before rollout."
+    },
+    {
+      "repository": "astral-sh/setup-uv",
+      "tag": "v10.3.0",
+      "commit_sha": "1c37ad07a6a961277cf70c0d37d6f313000f5884",
+      "object_type": "commit",
+      "published_at": "2026-10-09T20:41:00Z",
+      "release_url": "https://github.com/astral-sh/setup-uv/releases/tag/v10.3.0",
+      "tag_ref_api": "https://api.github.com/repos/astral-sh/setup-uv/git/ref/tags/v10.3.0",
+      "commit_url": "https://github.com/astral-sh/setup-uv/commit/1c37ad07a6a961277cf70c0d37d6f313000f5884",
+      "resolution_chain": [
+        {
+          "sha": "1c37ad07a6a961277cf70c0d37d6f313000f5884",
+          "type": "commit",
+          "url": "https://api.github.com/repos/astral-sh/setup-uv/git/commits/1c37ad07a6a961277cf70c0d37d6f313000f5884"
+        }
+      ],
+      "action_yml_url": "https://github.com/astral-sh/setup-uv/blob/1c37ad07a6a961277cf70c0d37d6f313000f5884/action.yml",
+      "runs_using": "node24",
+      "readme_url": "https://github.com/astral-sh/setup-uv/blob/1c37ad07a6a961277cf70c0d37d6f313000f5884/README.md",
+      "runtime_notes_source_lines": [
+        6,
+        54,
+        55,
+        81,
+        250
+      ],
+      "runtime_notes": "Node 24 action runtime; caches and Python selection have separate inputs."
+    }
+  ]
+}

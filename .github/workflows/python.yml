@@ -1,0 +1,248 @@
+# Hosted CPU runner; caller must provide a small CPU wheel lock and local fixtures.
+# No training, dataset fetching, editable dependency resolution, or network audit bypass is added.
+name: Reusable Python CPU quality
+'on':
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Repository-relative directory; use repository root for a workspace lockfile.
+        type: string
+        default: .
+      timeout-minutes:
+        description: Maximum duration of the selected Quality job; integer from 1 to 45.
+        type: number
+        default: 15
+      artifact-key:
+        description: Unique safe slug per reusable invocation in the same run.
+        type: string
+        default: quality
+      python-version:
+        description: Python version accepted by setup-python.
+        type: string
+        default: '3.11'
+      lockfile:
+        description: Committed hash-pinned pip requirements file for CPU CI, including verification tools.
+        type: string
+        required: true
+      project-install-command:
+        description: Optional local project install; use --no-deps --no-build-isolation.
+        type: string
+        default: ''
+      lint-command:
+        description: Repository command for lint; empty means this check is not applicable.
+        type: string
+        default: ''
+      typecheck-command:
+        description: Real typecheck command; Vue projects should invoke vue-tsc.
+        type: string
+        default: ''
+      test-command:
+        description: Fast unit tests using local fixtures; empty means not applicable.
+        type: string
+        default: ''
+      build-command:
+        description: Production bundle or wheel build command; no deployment.
+        type: string
+        default: ''
+      integration-command:
+        description: Small CPU/local integration or CLI smoke command; no large downloads.
+        type: string
+        default: ''
+      audit-command:
+        description: Required vulnerability command using a tool pinned in the CI lockfile.
+        type: string
+        required: true
+    outputs:
+      quality-passed:
+        description: String true only after the selected Quality job completes every configured check.
+        value: ${{ jobs.quality.outputs.quality-passed }}
+permissions:
+  contents: read
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: 'true'
+      CUDA_VISIBLE_DEVICES: ''
+      HF_HUB_OFFLINE: '1'
+      HF_DATASETS_OFFLINE: '1'
+      WANDB_MODE: disabled
+      PIP_NO_INPUT: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      PIP_RETRIES: '1'
+      PIP_DEFAULT_TIMEOUT: '15'
+    outputs:
+      quality-passed: ${{ steps.complete.outputs.quality-passed }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; verified 2026-10-13
+      with:
+        persist-credentials: false
+    - name: Validate configuration and committed CPU dependency lock
+      id: config
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        JOB_TIMEOUT: ${{ inputs.timeout-minutes }}
+        ARTIFACT_KEY: ${{ inputs.artifact-key }}
+        LOCKFILE: ${{ inputs.lockfile }}
+        LINT_COMMAND: ${{ inputs.lint-command }}
+        TYPECHECK_COMMAND: ${{ inputs.typecheck-command }}
+        TEST_COMMAND: ${{ inputs.test-command }}
+        BUILD_COMMAND: ${{ inputs.build-command }}
+        INTEGRATION_COMMAND: ${{ inputs.integration-command }}
+        BROWSER_COMMAND: ''
+        AUDIT_COMMAND: ${{ inputs.audit-command }}
+      run: |
+        python3 - <<'PY'
+        import os, re
+        from pathlib import Path
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", os.environ["ARTIFACT_KEY"]):
+            raise SystemExit("artifact-key must be a safe 1-64 character slug, unique per invocation")
+        root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+        relative = os.environ["WORKING_DIRECTORY"]
+        if not re.fullmatch(r"[\w./ -]+", relative) or Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise SystemExit("working-directory must be a simple repository-relative directory without '..'")
+        working = (root / relative).resolve()
+        if not working.is_relative_to(root) or not working.is_dir():
+            raise SystemExit("working-directory must resolve inside this checkout")
+        try:
+            timeout = float(os.environ["JOB_TIMEOUT"])
+            if not timeout.is_integer() or not 1 <= timeout <= 45:
+                raise ValueError()
+        except ValueError:
+            raise SystemExit("timeout-minutes must be an integer from 1 to 45")
+        import subprocess
+        lock = os.environ["LOCKFILE"]
+        if not re.fullmatch(r"[\w./ -]+", lock) or Path(lock).is_absolute() or ".." in Path(lock).parts:
+            raise SystemExit("lockfile must be a nonempty relative path without '..'")
+        lockpath = (working / lock).resolve()
+        if not lockpath.is_relative_to(working) or not lockpath.is_file():
+            raise SystemExit("lockfile must exist inside working-directory")
+        subprocess.run(["git", "--literal-pathspecs", "ls-files", "--error-unmatch", "--", str(lockpath.relative_to(root))], cwd=root, check=True, stdout=subprocess.DEVNULL)
+        if not any(os.environ[name].strip() for name in ("LINT_COMMAND", "TYPECHECK_COMMAND", "TEST_COMMAND", "BUILD_COMMAND", "INTEGRATION_COMMAND", "BROWSER_COMMAND")):
+            raise SystemExit("Configure at least one applicable quality command; audit alone is insufficient")
+        if not os.environ["AUDIT_COMMAND"].strip():
+            raise SystemExit("Python requires an audit-command and a locked audit tool")
+        PY
+    - name: Set up Python
+      id: python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0; verified 2026-10-13
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Create isolated environment and locate pip download cache
+      id: pip
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        python -m venv .venv-ci
+        printf '%s/.venv-ci/bin\n' "$PWD" >> "$GITHUB_PATH"
+        printf 'cache-path=%s\n' "$(python -m pip cache dir)" >> "$GITHUB_OUTPUT"
+    - name: Cache pip downloads only
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; verified 2026-10-13
+      with:
+        path: ${{ steps.pip.outputs.cache-path }}
+        key: ${{ runner.os }}-${{ runner.arch }}-python-${{ steps.python.outputs.python-version }}-${{ hashFiles(format('{0}/{1}',
+          inputs.working-directory, inputs.lockfile)) }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-python-${{ steps.python.outputs.python-version }}-
+    - name: Install hash-locked CPU wheels and verification tools
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        LOCKFILE: ${{ inputs.lockfile }}
+      run: |
+        # Retry only recognizable network failures, at most once; never rerun quality assertions.
+        retry_install() {
+          local attempt status log
+          log="$(mktemp)"
+          for attempt in 1 2; do
+            if "$@" 2>&1 | tee "$log"; then
+              rm -f "$log"
+              return 0
+            else
+              status=$?
+            fi
+            if [[ "$attempt" == 2 ]] || ! grep -Eiq 'ETIMEDOUT|ECONNRESET|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ReadTimeoutError|ConnectTimeout|Temporary failure|Connection reset|502 Bad Gateway|503 Service' "$log"; then
+              rm -f "$log"
+              return "$status"
+            fi
+            sleep 3
+          done
+        }
+        python -c 'import sys; assert sys.prefix != sys.base_prefix, "Expected isolated virtual environment"'
+        retry_install python -m pip install --require-hashes --only-binary=:all: -r "$LOCKFILE"
+        git --literal-pathspecs diff --exit-code -- "$LOCKFILE"
+    - name: Install local project without dependency resolution
+      if: ${{ inputs.project-install-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.project-install-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Lint
+      if: ${{ inputs.lint-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.lint-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Typecheck
+      if: ${{ inputs.typecheck-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.typecheck-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: CPU unit tests
+      if: ${{ inputs.test-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.test-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Build wheel / distribution
+      if: ${{ inputs.build-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.build-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Light integration / installed CLI smoke
+      if: ${{ inputs.integration-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.integration-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Dependency vulnerability gate
+      if: ${{ inputs.audit-command != '' }}
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        RUN_COMMAND: ${{ inputs.audit-command }}
+      run: |
+        bash -e -o pipefail -c "$RUN_COMMAND"
+    - name: Record successful completion
+      id: complete
+      run: |
+        echo "quality-passed=true" >> "$GITHUB_OUTPUT"
+    - name: Upload known failure reports
+      if: ${{ failure() && steps.config.outcome == 'success' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; verified 2026-10-13
+      with:
+        name: python-${{ inputs.artifact-key }}-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ inputs.working-directory }}/ci-reports/
+          ${{ inputs.working-directory }}/coverage/
+          ${{ inputs.working-directory }}/test-results/
+          ${{ inputs.working-directory }}/playwright-report/
+          !**/.env
+          !**/.env.*
+          !**/.git/**
+          !**/node_modules/**
+          !**/.venv-ci/**
+          !**/*credentials*
+        if-no-files-found: ignore
+        retention-days: 7
+        include-hidden-files: false
