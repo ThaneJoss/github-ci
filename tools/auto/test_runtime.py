@@ -82,6 +82,12 @@ class Fixtures(unittest.TestCase):
         with self.assertRaisesRegex(auto.Invalid, 'Unsupported'):
             self.detect()
 
+    def test_unknown_source_extension_is_not_pure_docs(self):
+        self.put('README.md', 'content\n')
+        self.put('source.unrecognized-language', 'something executable\n')
+        with self.assertRaisesRegex(auto.Invalid, 'Unsupported source'):
+            self.detect()
+
     def test_native_tests_without_package_script(self):
         self.package()
         self.put('small.test.cjs', "const test = require('node:test'); test('real',()=>{});\n")

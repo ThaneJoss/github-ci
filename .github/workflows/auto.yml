@@ -94,7 +94,9 @@ jobs:
                           'typecheck': ['typecheck:ci', 'typecheck', 'type-check', 'check-types'],
                           'test': ['test:ci', 'test', 'test:unit'], 'build': ['build:ci', 'build']}
           UNSUPPORTED = {'yarn.lock', 'bun.lock', 'bun.lockb', 'poetry.lock', 'Pipfile', 'Pipfile.lock',
-                         'setup.py', 'setup.cfg', 'Cargo.toml', 'go.mod', 'pom.xml', 'build.gradle'}
+                         'setup.py', 'setup.cfg', 'Cargo.toml', 'go.mod', 'pom.xml', 'build.gradle',
+                         'build.gradle.kts', 'Gemfile', 'Gemfile.lock', 'composer.json', 'composer.lock',
+                         'CMakeLists.txt', 'mix.exs', 'mix.lock', 'pdm.lock'}
           MAX_FILE = 8 * 1024 * 1024
           MAX_FILES = 20000
 
@@ -425,7 +427,11 @@ jobs:
               for path in lock_paths:
                   plan['locks'][path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
               if not plan['node'] and not plan['python']:
-                  code = [p for p in files if Path(p).suffix in {'.ts', '.tsx', '.jsx', '.vue', '.rs', '.go', '.java', '.c', '.cpp', '.sh', '.ipynb'}]
+                  document_extensions = {'.md', '.markdown', '.json', '.yaml', '.yml', '.toml', '.txt', '.rst', '.adoc',
+                                         '.csv', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.pdf',
+                                         '.ttf', '.otf', '.woff', '.woff2'}
+                  metadata_names = {'.gitignore', '.gitattributes', '.editorconfig', 'LICENSE', 'LICENCE', 'COPYING', 'NOTICE'}
+                  code = [p for p in files if Path(p).suffix.lower() not in document_extensions and Path(p).name not in metadata_names]
                   require(not code, f'Unsupported source without standard manifest: {code[:5]}')
                   docs = [p for p in files if Path(p).suffix.lower() in {'.md', '.markdown', '.json'}]
                   require(docs, 'No supported code or Markdown/JSON documents')

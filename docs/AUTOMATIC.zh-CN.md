@@ -25,7 +25,7 @@ quality-passed=true 表示本次计划中的检查和原生审计全部成功，
 | unittest | 上述标准测试文件明确 import unittest/from unittest import | 至少一个 test case；失败或任何 skip 均失败 |
 | Python 标准库脚本 | 用所选 Python 做语法检查；支持上述 unittest | 不凭 build.py、train.py、CLI 名称猜测要执行的任务 |
 | 同根 JS + Python | 分别发现两个运行时与检查，共享一次 job | 例如标准 package build script 可明确调用 Python 打包 |
-| 纯 Markdown/JSON | UTF-8/JSON 语法与支持的普通 Markdown 本地文件链接 | 不验证锚点、外链、wiki links 或站点生成；不算测试 |
+| 纯 Markdown/JSON | UTF-8/JSON 语法与支持的普通 Markdown 本地文件链接 | 不验证锚点、外链、wiki links 或站点生成；不算测试。纯文档仅接受常见文档/配置/图片/字体后缀及明确元数据文件名；陌生文件不降级为 docs 绿灯 |
 
 未声明运行时版本时才用默认值；版本范围由 setup-node/setup-python 选取可用版本，范围本身不是精确 patch 锁。已存在的版本兼容矩阵不会从旧 workflow 自动复制，也不应因使用本入口而删除；需要多版本时保留 caller 的 matrix，用可选 node-version/python-version 传入每个版本。不同 runtime input 会区分并发取消组。
 
