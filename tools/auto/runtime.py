@@ -218,8 +218,11 @@ def discover(root, overrides=None):
             'locks': {}, 'root': str(root), 'tests': 'not-run', 'system_packages': overrides.get('system-packages', '')}
     for value in plan['system_packages'].split():
         require(re.fullmatch(r'[a-z0-9][a-z0-9+.-]*(?:=[a-zA-Z0-9:~+.-]+)?', value), 'Invalid Ubuntu package name/version')
-    unsupported = [p for p in files if Path(p).name in UNSUPPORTED or re.fullmatch(r'requirements.*\.txt', Path(p).name)]
+    unsupported = [p for p in files if Path(p).name in UNSUPPORTED or (re.fullmatch(r'requirements.*\.txt', Path(p).name) and not ('uv.lock' in names and Path(p).parent == Path('.')))]
     require(not unsupported, f'Unsupported dependency/build metadata: {unsupported}; retain explicit mode')
+    if 'uv.lock' in names and any(re.fullmatch(r'requirements.*\.txt', p) for p in files):
+        plan['notes'].append('Native uv.lock takes precedence over root requirements*.txt; pip files are not installed or converted')
+
     node_manifests = [p for p in files if Path(p).name == 'package.json']
     py_manifests = [p for p in files if Path(p).name == 'pyproject.toml']
     lock_paths = [p for p in files if Path(p).name in {*LOCKS, 'uv.lock'}]
@@ -300,6 +303,8 @@ def discover(root, overrides=None):
         pyproject = pyproject or {}
         project = pyproject.get('project', {})
         uv_config = pyproject.get('tool', {}).get('uv', {})
+        require(not ({'poetry', 'pdm'} & set(pyproject.get('tool', {}))), 'Alternative Python dependency metadata requires an explicit workflow')
+
         require(not uv_config.get('workspace'), 'uv workspaces need an explicit workflow for member checks')
         require(not [p for p in py_manifests if p != 'pyproject.toml'], 'Independent Python roots require explicit working-directory')
         require(not [p for p in lock_paths if Path(p).name == 'uv.lock' and p != 'uv.lock'], 'Nested uv.lock needs explicit working-directory')

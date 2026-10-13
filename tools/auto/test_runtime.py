@@ -178,6 +178,14 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(plan['python']['selection'], ['--only-group', 'ci'])
         self.assertTrue(any(c.get('mode') == 'pytest' for c in plan['checks']))
 
+    def test_uv_precedence_over_root_pip_exports(self):
+        self.put('pyproject.toml', '[project]\nname="molecule"\nversion="0.0.0"\ndependencies=["six==1.17.0"]\n')
+        self.put('uv.lock', 'version = 1\n')
+        self.put('requirements.txt', 'six==1.17.0\n')
+        self.put('module.py', 'value = 1\n')
+        self.assertTrue(self.detect()['python']['uv'])
+        self.assertTrue(any('takes precedence' in note for note in self.detect()['notes']))
+
     def test_python_stdlib_and_no_build_guess(self):
         self.put('build.py', 'raise RuntimeError("not an automatic entrypoint")\n')
         self.put('tests/test_a.py', 'import unittest\nclass TestA(unittest.TestCase):\n def test_a(self): self.assertTrue(True)\n')

@@ -62,7 +62,7 @@ uv 原生锁保留不动。sync 使用 --no-build --no-install-project：仅安�
 
 只枚举 git ls-files，不递归磁盘查找；最多 20000 跟踪路径，单个读取文件最多 8 MiB。忽略 node_modules/.venv/vendor/dist/build/coverage 等安装及生成目录。遇到超过范围的结构，可以为独立根显式传 working-directory；各根必须有自己的真实锁。不要为避开错误删除已有必要检查。
 
-无法可靠自动判断产品功能的“必要覆盖”、脚本是否包含远程副作用、系统工具、wheel 验收、CPU/GPU语义或旧 CI 矩阵意图。主路径不引入专属配置文件；少数特殊需求使用已有脚本/标准元数据，或保留显式接口。根 requirements*.txt 暂要求显式模式，即使同时有 uv.lock 也不猜两者的权威关系。
+无法可靠自动判断产品功能的“必要覆盖”、脚本是否包含远程副作用、系统工具、wheel 验收、CPU/GPU语义或旧 CI 矩阵意图。主路径不引入专属配置文件；少数特殊需求使用已有脚本/标准元数据，或保留显式接口。根 pyproject.toml＋uv.lock 优先于根 requirements*.txt 导出文件；摘要明确说明只安装原生 uv 锁。只有 pip 文件、嵌套 pip 根、或混用 Poetry/PDM 声明时要求显式模式，不猜多个依赖系统。
 
 ## 可选逃生接口
 
