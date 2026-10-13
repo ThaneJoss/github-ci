@@ -8,7 +8,7 @@
 
 实际发现并修复了两类集成问题：setup-python 需要把 PEP 440 范围转换成 semver；7zz 所需包为 7zip-standalone，不能假定 7zip 包或 runner 自带满足测试。失败 run 的自动分支及汇总 Gate 都保持失败，未用忽略错误或跳过测试处理。
 
-本版示例固定的运行时代码提交为 `ae3905e0f5782edd68b2f201f42b075b55941013`，增加原生 uv.lock 优先于根 requirements*.txt 导出文件的支持；最终 head 与全部检查的验收记录放在 [draft PR #1](https://github.com/ThaneJoss/github-ci/pull/1)，避免在 commit 中循环引用自身 SHA。PR 未合并，没有改业务仓库或分支保护。
+本版示例固定的运行时代码提交为 `1e1853de35edcace1a1a87ad2458aec47bd07861`，增加原生 uv.lock 优先于根 requirements*.txt 导出文件的支持；最终 head 与全部检查的验收记录放在 [draft PR #1](https://github.com/ThaneJoss/github-ci/pull/1)，避免在 commit 中循环引用自身 SHA。PR 未合并，没有改业务仓库或分支保护。
 
 ## 回归覆盖
 
