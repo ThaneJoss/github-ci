@@ -5,9 +5,9 @@ name: Reusable CI
   workflow_call:
     inputs:
       profile:
-        description: Exactly node, python or docs.
+        description: Automatic standard metadata discovery (default), or explicit node/python/docs escape hatch.
         type: string
-        required: true
+        default: auto
       working-directory:
         description: Repository-relative directory; use repository root for a workspace lockfile.
         type: string
@@ -23,11 +23,11 @@ name: Reusable CI
       node-version:
         description: Node version accepted by setup-node; match package engines.
         type: string
-        default: '22'
+        default: ''
       package-manager:
         description: Exactly npm or pnpm.
         type: string
-        default: npm
+        default: ''
       package-manager-version:
         description: Exact x.y.z; required for pnpm, empty uses the npm bundled with Node.
         type: string
@@ -67,7 +67,7 @@ name: Reusable CI
       python-version:
         description: Python version accepted by setup-python.
         type: string
-        default: '3.11'
+        default: ''
       project-install-command:
         description: Optional local project install; use --no-deps --no-build-isolation.
         type: string
@@ -80,14 +80,28 @@ name: Reusable CI
         description: Offline content/manifest/link validation for docs profile.
         type: string
         default: ''
+      system-packages:
+        description: Optional Ubuntu packages for tests, e.g. 7zip.
+        type: string
+        default: ''
     outputs:
       quality-passed:
-        description: String true only after the selected profile passes; callers must also require job result success.
-        value: ${{ jobs.node.outputs.quality-passed || jobs.python.outputs.quality-passed || jobs.docs.outputs.quality-passed
-          }}
+        description: All selected checks completed and strict Gate succeeded; not a claim that missing tests ran.
+        value: ${{ jobs.gate.outputs.quality-passed }}
+concurrency:
+  group: reusable-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.working-directory }}-${{ inputs.artifact-key }}-${{ inputs.node-version }}-${{ inputs.python-version }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
+  auto:
+    name: Auto
+    if: ${{ inputs.profile == 'auto' }}
+    uses: ./.github/workflows/auto.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
+      overrides: ${{ toJSON(inputs) }}
   node:
     name: Node
     if: ${{ inputs.profile == 'node' }}
@@ -96,8 +110,8 @@ jobs:
       working-directory: ${{ inputs.working-directory }}
       timeout-minutes: ${{ inputs.timeout-minutes }}
       artifact-key: ${{ inputs.artifact-key }}
-      node-version: ${{ inputs.node-version }}
-      package-manager: ${{ inputs.package-manager }}
+      node-version: ${{ inputs.node-version || '22' }}
+      package-manager: ${{ inputs.package-manager || 'npm' }}
       package-manager-version: ${{ inputs.package-manager-version }}
       lockfile: ${{ inputs.lockfile }}
       lint-command: ${{ inputs.lint-command }}
@@ -115,7 +129,7 @@ jobs:
       working-directory: ${{ inputs.working-directory }}
       timeout-minutes: ${{ inputs.timeout-minutes }}
       artifact-key: ${{ inputs.artifact-key }}
-      python-version: ${{ inputs.python-version }}
+      python-version: ${{ inputs.python-version || '3.11' }}
       lockfile: ${{ inputs.lockfile }}
       project-install-command: ${{ inputs.project-install-command }}
       lint-command: ${{ inputs.lint-command }}
@@ -136,7 +150,7 @@ jobs:
       docs-command: ${{ inputs.docs-command }}
   invalid-profile:
     name: Reject invalid profile
-    if: ${{ !contains(fromJSON('["node","python","docs"]'), inputs.profile) }}
+    if: ${{ !contains(fromJSON('["auto","node","python","docs"]'), inputs.profile) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -146,3 +160,37 @@ jobs:
       run: |
         printf 'Unsupported CI profile: %s\n' "$PROFILE" >&2
         exit 1
+  gate:
+    name: Gate
+    if: ${{ always() }}
+    needs: [auto, node, python, docs, invalid-profile]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      quality-passed: ${{ steps.gate.outputs.quality-passed }}
+    steps:
+      - name: Require exactly the selected successful profile
+        id: gate
+        env:
+          PROFILE: ${{ inputs.profile }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 -I - <<'PY_GATE'
+          import json, os
+          needs = json.loads(os.environ['NEEDS'])
+          profile = os.environ['PROFILE']
+          expected = {'auto', 'node', 'python', 'docs'}
+          assert profile in expected, 'Unsupported profile'
+          assert set(needs) == expected | {'invalid-profile'}, 'Missing/unknown job result'
+          for name, job in needs.items():
+              if name == profile:
+                  assert job['result'] == 'success' and job.get('outputs', {}).get('quality-passed') == 'true', 'Selected checks failed, cancelled, skipped, or have no completion proof'
+              else:
+                  assert job['result'] == 'skipped', 'Unselected job unexpectedly ran'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('quality-passed=true\n')
+          PY_GATE
+      - name: Reject a cancelled run
+        if: ${{ cancelled() }}
+        run: exit 1

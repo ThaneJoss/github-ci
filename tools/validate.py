@@ -23,7 +23,7 @@ for file in files:
             for _, body in re.findall(r"<<'([A-Z_]+)'\n(.*?)\n\1(?:\n|$)", source, re.S):
                 ast.parse(body)
                 inline_count += 1
-    if file.parent == ROOT / 'examples':
+    if file.parent == ROOT / 'examples' and 'gate' in doc['jobs']:
         steps = doc['jobs']['gate']['steps']
         for state, passed in itertools.product(['success', 'failure', 'cancelled', 'skipped', ''], ['true', 'false', '']):
             env = {**os.environ, 'CI_RESULT': state, 'QUALITY_PASSED': passed}
@@ -39,13 +39,13 @@ steps = maintenance['jobs']['gate']['steps']
 for checks, docs, passed in itertools.product(['success', 'failure', 'cancelled', 'skipped', ''],
                                              ['success', 'failure', 'cancelled', 'skipped', ''],
                                              ['true', 'false', '']):
-    env = {**os.environ, 'CHECKS_RESULT': checks, 'DOCS_RESULT': docs, 'DOCS_PASSED': passed}
+    env = {**os.environ, 'CHECKS_RESULT': checks, 'DOCS_RESULT': docs, 'DOCS_PASSED': passed, 'FIXTURES_RESULT': 'success', 'FIXTURES_PASSED': 'true'}
     run = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', steps[0]['run']], env=env, capture_output=True)
     assert (run.returncode == 0) == (checks == docs == 'success' and passed == 'true')
     gate_count += 1
 assert steps[1]['if'] == '${{ cancelled() }}'
 assert subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', steps[1]['run']], capture_output=True).returncode != 0
 gate_count += 1
-for helper in [*ROOT.glob('examples/helpers/*.py'), *ROOT.glob('tools/*.py')]:
+for helper in [*ROOT.glob('examples/helpers/*.py'), *ROOT.glob('tools/*.py'), *ROOT.glob('tools/auto/*.py')]:
     ast.parse(helper.read_text())
 print(f'PASS: {len(files)} YAML files; {bash_count} bash blocks; {inline_count} inline Python blocks; {gate_count} Gate cases.')

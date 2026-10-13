@@ -1,0 +1,10 @@
+{
+  "name": "workspace-probe",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  }
+}
