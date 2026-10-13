@@ -175,57 +175,7 @@ jobs:
           def pnpm_patterns(path):
               # Literal block/inline YAML lists only; no parser downloaded before discovery.
               content = read(path)
-              match = re.search(r'^packages:[ \t]*(\[[^\n]*\])?[ \t]*(?:#.*)?
-          PY_RUNTIME
-          /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" detect
-      - name: Set up declared Node
-        id: node
-        if: ${{ steps.discover.outputs.node-version != '' }}
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ steps.discover.outputs.node-version }}
-          package-manager-cache: false
-      - name: Set up declared Python
-        id: python
-        if: ${{ steps.discover.outputs.python-version != '' }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ steps.discover.outputs.python-version }}
-      - name: Set up fixed uv (native lock and audit)
-        if: ${{ steps.discover.outputs.uv == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: '0.12.19'
-          enable-cache: false
-      - name: Cache Node download stores
-        if: ${{ steps.discover.outputs.node-lock == 'true' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ runner.temp }}/github-ci-node-store
-            ${{ runner.temp }}/github-ci-npm-cache
-          key: auto-v1-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ steps.discover.outputs.node-manager }}-${{ steps.discover.outputs.lock-key }}
-      - name: Cache uv downloads (never the virtual environment)
-        if: ${{ steps.discover.outputs.uv == 'true' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/github-ci-uv-cache
-          key: auto-v1-${{ runner.os }}-${{ runner.arch }}-uv-0.12.19-python-${{ steps.python.outputs.python-version }}-${{ steps.discover.outputs.lock-key }}
-      - name: Install frozen dependencies once
-        run: /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" install
-      - name: Execute discovered checks and mandatory audits
-        run: /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" execute
-      - name: Record successful completion
-        id: complete
-        run: echo 'quality-passed=true' >> "$GITHUB_OUTPUT"
-      - name: Summarize executed and missing checks
-        if: ${{ always() }}
-        run: |
-          if [[ -f "$CI_AUTO_DIR/runtime.py" ]]; then
-            /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" summary
-          fi
-      # No automatic failure artifacts: caller reports may contain secrets or datasets.
-, content, re.M)
+              match = re.search(r'^packages:[ \t]*(\[[^\n]*\])?[ \t]*(?:#.*)?$', content, re.M)
               require(match, 'pnpm-workspace.yaml needs a literal packages list')
               if match[1]:
                   values = ast.literal_eval(match[1])
@@ -368,57 +318,7 @@ jobs:
                   if not dependencies and not root_locks:
                       plan['notes'].append('Node has no declared dependencies/lock: no dependency installation or vulnerability claim')
                   if not any(c['kind'] == 'test' for c in plan['checks']):
-                      native_tests = [p for p in js_files if re.search(r'(?:\.test|\.spec)\.(?:c|m)?js
-          PY_RUNTIME
-          /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" detect
-      - name: Set up declared Node
-        id: node
-        if: ${{ steps.discover.outputs.node-version != '' }}
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ steps.discover.outputs.node-version }}
-          package-manager-cache: false
-      - name: Set up declared Python
-        id: python
-        if: ${{ steps.discover.outputs.python-version != '' }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ steps.discover.outputs.python-version }}
-      - name: Set up fixed uv (native lock and audit)
-        if: ${{ steps.discover.outputs.uv == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: '0.12.19'
-          enable-cache: false
-      - name: Cache Node download stores
-        if: ${{ steps.discover.outputs.node-lock == 'true' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ runner.temp }}/github-ci-node-store
-            ${{ runner.temp }}/github-ci-npm-cache
-          key: auto-v1-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ steps.discover.outputs.node-manager }}-${{ steps.discover.outputs.lock-key }}
-      - name: Cache uv downloads (never the virtual environment)
-        if: ${{ steps.discover.outputs.uv == 'true' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/github-ci-uv-cache
-          key: auto-v1-${{ runner.os }}-${{ runner.arch }}-uv-0.12.19-python-${{ steps.python.outputs.python-version }}-${{ steps.discover.outputs.lock-key }}
-      - name: Install frozen dependencies once
-        run: /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" install
-      - name: Execute discovered checks and mandatory audits
-        run: /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" execute
-      - name: Record successful completion
-        id: complete
-        run: echo 'quality-passed=true' >> "$GITHUB_OUTPUT"
-      - name: Summarize executed and missing checks
-        if: ${{ always() }}
-        run: |
-          if [[ -f "$CI_AUTO_DIR/runtime.py" ]]; then
-            /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" summary
-          fi
-      # No automatic failure artifacts: caller reports may contain secrets or datasets.
-, p)
+                      native_tests = [p for p in js_files if re.search(r'(?:\.test|\.spec)\.(?:c|m)?js$', p)
                                       and re.search(r'(?:require\([\"\']node:test[\"\']\)|from\s+[\"\']node:test[\"\'])', read(root / p))]
                       if native_tests:
                           plan['checks'].append({'kind': 'test', 'cwd': '.', 'argv': ['node', '--test', '--test-reporter=tap', *native_tests],
@@ -589,57 +489,7 @@ jobs:
                   if path.suffix.lower() == '.json':
                       json_file(path)
                       continue
-                  content = re.sub(r'(?ms)^\s*' + chr(96)*3 + r'.*?^\s*' + chr(96)*3 + r'\s*$|^\s*~~~.*?^\s*~~~\s*
-          PY_RUNTIME
-          /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" detect
-      - name: Set up declared Node
-        id: node
-        if: ${{ steps.discover.outputs.node-version != '' }}
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ steps.discover.outputs.node-version }}
-          package-manager-cache: false
-      - name: Set up declared Python
-        id: python
-        if: ${{ steps.discover.outputs.python-version != '' }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ steps.discover.outputs.python-version }}
-      - name: Set up fixed uv (native lock and audit)
-        if: ${{ steps.discover.outputs.uv == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: '0.12.19'
-          enable-cache: false
-      - name: Cache Node download stores
-        if: ${{ steps.discover.outputs.node-lock == 'true' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ${{ runner.temp }}/github-ci-node-store
-            ${{ runner.temp }}/github-ci-npm-cache
-          key: auto-v1-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ steps.discover.outputs.node-manager }}-${{ steps.discover.outputs.lock-key }}
-      - name: Cache uv downloads (never the virtual environment)
-        if: ${{ steps.discover.outputs.uv == 'true' }}
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/github-ci-uv-cache
-          key: auto-v1-${{ runner.os }}-${{ runner.arch }}-uv-0.12.19-python-${{ steps.python.outputs.python-version }}-${{ steps.discover.outputs.lock-key }}
-      - name: Install frozen dependencies once
-        run: /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" install
-      - name: Execute discovered checks and mandatory audits
-        run: /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" execute
-      - name: Record successful completion
-        id: complete
-        run: echo 'quality-passed=true' >> "$GITHUB_OUTPUT"
-      - name: Summarize executed and missing checks
-        if: ${{ always() }}
-        run: |
-          if [[ -f "$CI_AUTO_DIR/runtime.py" ]]; then
-            /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" summary
-          fi
-      # No automatic failure artifacts: caller reports may contain secrets or datasets.
-, '', content)
+                  content = re.sub(r'(?ms)^\s*' + chr(96)*3 + r'.*?^\s*' + chr(96)*3 + r'\s*$|^\s*~~~.*?^\s*~~~\s*$', '', content)
                   content = re.sub(chr(96) + r'[^' + chr(96) + r'\n]*' + chr(96), '', content)
                   for link in re.findall(r'\[[^\]\n]*\]\(<?([^\s)>]+)>?(?:\s+["\'][^\n]*["\'])?\)', content):
                       url = urlsplit(link)
