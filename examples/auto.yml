@@ -1,0 +1,13 @@
+# Complete caller: no inputs, environment variables or secrets to configure.
+# Review and update the immutable template SHA when upgrading.
+name: CI
+'on':
+  push: {}
+  pull_request: {}
+  merge_group: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  ci:
+    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@1e1853de35edcace1a1a87ad2458aec47bd07861

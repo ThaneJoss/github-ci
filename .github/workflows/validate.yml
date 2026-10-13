@@ -39,6 +39,10 @@ jobs:
         run: |
           actionlint -no-color -shellcheck='' .github/workflows/*.yml examples/*.yml
           python tools/validate.py
+      - name: Verify generated exact-version runtime and automatic fixtures
+        run: |
+          python tools/auto/render.py --check
+          python tools/auto/test_runtime.py
       - name: Test audit and content helpers
         run: python tools/test_helpers.py
       - name: Check identity-free capability contract
@@ -52,21 +56,44 @@ jobs:
       profile: docs
       timeout-minutes: 5
       docs-command: python3 examples/helpers/check_docs.py README.md docs
+  fixtures:
+    name: Auto fixture (${{ matrix.fixture }})
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - {fixture: npm, packages: ''}
+          - {fixture: pnpm, packages: ''}
+          - {fixture: plugin, packages: ''}
+          - {fixture: uv, packages: '7zip-standalone'}
+          - {fixture: stdlib, packages: ''}
+          - {fixture: python-patch, packages: ''}
+          - {fixture: docs, packages: ''}
+          - {fixture: no-tests, packages: ''}
+          - {fixture: workspace, packages: ''}
+    uses: ./.github/workflows/ci.yml
+    with:
+      working-directory: tests/fixtures/${{ matrix.fixture }}
+      system-packages: ${{ matrix.packages }}
+      timeout-minutes: 8
   gate:
     name: Gate
     if: ${{ always() }}
-    needs: [checks, docs-smoke]
+    needs: [checks, docs-smoke, fixtures]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions: {}
     steps:
       - name: Require validation and reusable workflow completion
         env:
+          FIXTURES_RESULT: ${{ needs.fixtures.result }}
+          FIXTURES_PASSED: ${{ needs.fixtures.outputs.quality-passed }}
           CHECKS_RESULT: ${{ needs.checks.result }}
           DOCS_RESULT: ${{ needs.docs-smoke.result }}
           DOCS_PASSED: ${{ needs.docs-smoke.outputs.quality-passed }}
         run: |
-          if [[ "$CHECKS_RESULT" != success || "$DOCS_RESULT" != success || "$DOCS_PASSED" != true ]]; then
+          if [[ "$CHECKS_RESULT" != success || "$DOCS_RESULT" != success || "$DOCS_PASSED" != true || "$FIXTURES_RESULT" != success || "$FIXTURES_PASSED" != true ]]; then
             printf 'Template validation failed: checks=%s docs=%s completed=%s\n' "$CHECKS_RESULT" "$DOCS_RESULT" "$DOCS_PASSED" >&2
             exit 1
           fi

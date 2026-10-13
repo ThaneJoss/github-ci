@@ -1,26 +1,36 @@
 # 验证记录与验收边界
 
-## 已完成的 GitHub 执行
+## 自动入口的真实 GitHub 验证
 
-2026-10-13，经授权首次发布到公开模板仓库。模板commit [`835d0365f1a05d53f1a3c49fa38d907ee3828093`](https://github.com/ThaneJoss/github-ci/commit/835d0365f1a05d53f1a3c49fa38d907ee3828093) 的 [Template validation run 38344010586](https://github.com/ThaneJoss/github-ci/actions/runs/38344010586) 已成功，执行窗口UTC 03:55:53–03:56:09。
+自动入口首个全绿提交 [5445f5879fcb2dd07240490497e7b249715a73e2](https://github.com/ThaneJoss/github-ci/commit/5445f5879fcb2dd07240490497e7b249715a73e2) 的 [Template validation run 38351517899](https://github.com/ThaneJoss/github-ci/actions/runs/38351517899) 成功。9 类泛化 fixtures：npm、pnpm、零依赖 JS＋Python 标准库打包、Python/uv＋7zz、Python标准库、Python patch 下限、纯 docs、无测试命令、npm workspace。22 个实际派发 job 成功，其他未选 profile 为预期 skipped；runner 执行时间合计152秒，包含所有 fixture 和各 Gate，不是一个调用方的成本或实际账单，也不是加速倍数。
 
-成功job为`Template checks`、`Reusable docs smoke / Docs / Quality`、顶层`Gate`；未选Node/Python和非法profile分支按设计skip。这次真实运行验证了同仓`validate → ci → docs`嵌套调用、checkout、docs完成证明传播及固定Gate的成功路径。
+真实执行包含 npm ci/pnpm frozen install、包管理器原生审计、原生 uv export/sync/audit --locked、7zz 小归档验证、Python >=3.14.5,<3.15 选择及运行、JS/Python行为测试、无测试时的 NOT RUN 记录、同仓精确版本嵌套调用和稳定 Gate。文档/语法检查从不计为测试。uv 测试安装真实的小型锁定第三方 wheel，不转换成手写 pip hash 锁。
 
-五个接入样例已固定上述真实模板SHA，仍需调用方提供真实脚本与锁。未修改其他项目，没有配置分支保护、App、凭据或部署。
+实际发现并修复了两类集成问题：setup-python 需要把 PEP 440 范围转换成 semver；7zz 所需包为 7zip-standalone，不能假定 7zip 包或 runner 自带满足测试。失败 run 的自动分支及汇总 Gate 都保持失败，未用忽略错误或跳过测试处理。
 
-## 本地与维护 CI 检查
+本版示例固定的运行时代码提交为 `1e1853de35edcace1a1a87ad2458aec47bd07861`，增加原生 uv.lock 优先于根 requirements*.txt 导出文件的支持；最终 head 与全部检查的验收记录放在 [draft PR #1](https://github.com/ThaneJoss/github-ci/pull/1)，避免在 commit 中循环引用自身 SHA。PR 未合并，没有改业务仓库或分支保护。
 
-- 10个YAML通过actionlint 1.7.12：4个可复用模块、5个caller样例、1个独立维护workflow。
-- 43个shell块通过`bash -n`，4个内嵌Python块与helper/维护脚本通过语法检查。
-- 156组Gate状态检查：原5个caller共80组，加维护双上游Gate的76组；包含fail/cancel/skip/缺失输出。
-- 47项漏洞审计/内容helper离线测试及33项可移植性检查用例通过；公共实现未检测到仓库身份分流。
-- 初始离线审查另执行60组配置边界、6组有限重试模拟；对应4个核心模块和2个helper未改变，其SHA256沿用原检查证据。
-- 14份大型公开项目来源按commit/blob SHA与SHA256记录；研究文档18个固定文件/行号链接核对到已读取内容。
+## 回归覆盖
 
-维护CI安装哈希固定的PyYAML Linux x86_64/Python 3.12 wheel，下载actionlint校验固定SHA256。为使本地和远端检查范围一致，actionlint显式不调用ShellCheck；`bash -n`只证明shell语法，不是完整shell语义或安全审计。Action来源见[action-pins.json](action-pins.json)，不宣称审计了其全部代码和传递下载。
+维护 CI 运行 actionlint、bash/Python 语法、自动 workflow 逐字生成校验、通用能力可移植性检查、原有47项审计/内容 helper 与33项可移植性用例，并执行自动识别回归：
+- npm/pnpm选择、版本与锁冲突、缺锁、workspace范围与独立锁歧义；
+- 陌生名称/更名结果一致，不查 owner/repo；
+- 不递归 node_modules/生成目录，不读越界 symlink；caller json.py 不覆盖模板解释器；
+- 约定脚本优先级、原生 node:test、拒绝直接发布/训练/下载及测试占位/错误吞没；
+- Python精确 patch下限、PEP440范围转换、uv与pip导出共存、stdlib/pytest选择；
+- 空测试、跳过、测试失败、审计失败及锁变化不能生成成功证明；
+- 入口所有 inputs 无必填项；嵌入代码与源码一致。
 
-## 尚未完成
+Gate真值表覆盖 success/failure/cancelled/skipped/缺失输出，以及未选分支意外运行。它在 GitHub 上执行真实 Gate 脚本；这不等于对 GitHub 强制取消整个 run 的调度行为已做实测。
 
-跨仓调用与fork权限、Node/Python真实安装和缓存、浏览器工具、真实项目脚本、取消中途的GitHub调度、失败产物和审计CLI真实schema仍需隔离试点。成功的资料档调用不能代表这些能力已经验收，也不能证明任何应用已通过质量或线上行为验收。
+Actions 来源及固定 SHA 沿用 [action-pins.json](action-pins.json)。actionlint 1.7.12 下载校验固定 SHA256；PyYAML 通过 require-hashes 安装。未启用 ShellCheck，不宣称 bash -n 等于完整 shell 语义审计。
 
-核心模块不提供调用方缺失的测试、CPU锁或wheel/CLI实现。可选audit helper仅支持声明的schema及包+漏洞例外；dev/production或依赖路径限定尚未支持，未知字段会失败。资料helper不是完整Markdown/Obsidian/站点解析器，不验证anchors、wiki-links或外链可达性。静态可移植性检查只识别常见身份读取模式，不证明任意混淆代码不存在身份依赖。
+## 未测与不可代替的边界
+
+未创建外部 caller 仓库，也未改业务项目，因此**跨仓调用、fork权限、旧多版本/多系统矩阵等价性、真实科研/应用覆盖、GPU训练、云平台、浏览器/部署验收、私有registry和整个run中途取消**未验收。自动模式的失败产物策略是不上传，不假称完成了各种第三方报告脱敏。
+
+没有因为一个轻量 fixture 成功就声称所有项目已兼容。Python源代码检查不证明wheel正确；node命令退出成功也不能证明未知runner执行了多少测试。CPU组选取和大依赖限制见[自动识别契约](AUTOMATIC.zh-CN.md)。原有13-job或兼容矩阵需原样保留，直到项目自行证明覆盖等价后再改；本 PR 没有删减这些项目的检查。
+
+## 首次显式模块发布（历史证据）
+
+初始提交 [835d0365f1a05d53f1a3c49fa38d907ee3828093](https://github.com/ThaneJoss/github-ci/commit/835d0365f1a05d53f1a3c49fa38d907ee3828093) 的 [run 38344010586](https://github.com/ThaneJoss/github-ci/actions/runs/38344010586) 验证了显式 docs 嵌套调用成功路径。原五个显式 caller examples 仍固定此旧提交；它们不是自动入口的完整实测证据。行业来源、设计、安全和成本讨论继续保留在对应文档中。

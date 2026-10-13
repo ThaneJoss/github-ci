@@ -1,0 +1,610 @@
+"""Automatic CI runtime, embedded verbatim into auto.yml at release time.
+
+Only standard metadata and tracked paths influence discovery. No repository identity.
+Runs in Python isolated mode so caller modules cannot shadow the template.
+"""
+from __future__ import annotations
+
+import argparse
+import ast
+import fnmatch
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tomllib
+import xml.etree.ElementTree as ET
+
+IGNORED = {'.git', 'node_modules', '.venv', '.venv-ci', 'venv', 'vendor',
+           'dist', 'build', 'coverage', '__pycache__', '.next', '.nuxt', '.output'}
+LOCKS = {'package-lock.json': 'npm', 'npm-shrinkwrap.json': 'npm', 'pnpm-lock.yaml': 'pnpm'}
+SCRIPT_NAMES = {'lint': ['lint:ci', 'lint'],
+                'typecheck': ['typecheck:ci', 'typecheck', 'type-check', 'check-types'],
+                'test': ['test:ci', 'test', 'test:unit'], 'build': ['build:ci', 'build']}
+UNSUPPORTED = {'yarn.lock', 'bun.lock', 'bun.lockb', 'poetry.lock', 'Pipfile', 'Pipfile.lock',
+               'setup.py', 'setup.cfg', 'Cargo.toml', 'go.mod', 'pom.xml', 'build.gradle',
+               'build.gradle.kts', 'Gemfile', 'Gemfile.lock', 'composer.json', 'composer.lock',
+               'CMakeLists.txt', 'mix.exs', 'mix.lock', 'pdm.lock'}
+MAX_FILE = 8 * 1024 * 1024
+MAX_FILES = 20000
+
+
+class Invalid(ValueError):
+    pass
+
+
+def require(ok, message):
+    if not ok:
+        raise Invalid(message)
+
+
+def read(path):
+    require(path.is_file() and not path.is_symlink(), f'Expected regular committed file: {path}')
+    require(path.stat().st_size <= MAX_FILE, f'Metadata/source exceeds 8 MiB: {path}')
+    return path.read_text(encoding='utf-8')
+
+
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, f'Duplicate JSON key: {key}')
+        result[key] = value
+    return result
+
+
+def json_file(path):
+    return json.loads(read(path), object_pairs_hook=unique)
+
+
+def tracked(root):
+    data = subprocess.check_output(['git', 'ls-files', '-z', '--'], cwd=root).decode()
+    paths = sorted(set(data.rstrip('\0').split('\0')) - {''})
+    require(len(paths) <= MAX_FILES, 'More than 20000 tracked paths; select a smaller working-directory')
+    result = []
+    for value in paths:
+        path = PurePosixPath(value)
+        if set(path.parts) & IGNORED:
+            continue
+        require(not path.is_absolute() and '..' not in path.parts and '\n' not in value and '\r' not in value,
+                'Unsupported tracked path')
+        full = root / value
+        require(not any(p.is_symlink() for p in [full, *full.parents] if p != root.parent),
+                f'Symlink not supported in automatic discovery: {value}')
+        require(full.is_file(), f'Submodule or missing tracked file: {value}; use an explicit workflow')
+        result.append(value)
+    return result
+
+
+def version(value, kind):
+    require(isinstance(value, str) and value and len(value) <= 128 and '\n' not in value,
+            f'Invalid {kind} version declaration')
+    pattern = r'[v\d.xX*<>=~^|, -]+' if kind == 'node' else r'[\d.*<>=!~, ]+'
+    require(re.fullmatch(pattern, value) and re.search(r'\d', value),
+            f'Unsupported {kind} version {value!r}; use stable numeric versions/ranges')
+    return value.removeprefix('v').strip()
+
+
+def python_setup_range(value):
+    """Translate the supported stable PEP 440 subset to setup-python's semver."""
+    if re.fullmatch(r'\d+(?:\.\d+){0,2}', value):
+        return value
+    alternatives = ['']
+    for clause in value.split(','):
+        m = re.fullmatch(r'\s*(>=|<=|==|!=|~=|>|<)\s*(\d+(?:\.\d+){0,2})(\.\*)?\s*', clause)
+        require(m, f'Unsupported Python constraint: {value}')
+        op, numeric, wildcard = m.groups()
+        parts = list(map(int, numeric.split('.')))
+        padded = parts + [0] * (3 - len(parts))
+        exact = '.'.join(map(str, padded))
+        if wildcard:
+            require(op in {'==', '!='}, 'Python wildcards require == or !=')
+            upper = parts[:]
+            upper[-1] += 1
+            upper += [0] * (3 - len(upper))
+            high = '.'.join(map(str, upper))
+            choices = [f'>={exact} <{high}'] if op == '==' else [f'<{exact}', f'>={high}']
+        elif op == '~=':
+            require(len(parts) >= 2, 'Compatible Python ranges need at least major.minor')
+            upper = parts[:-1]
+            upper[-1] += 1
+            upper += [0] * (3 - len(upper))
+            choices = [f'>={exact} <' + '.'.join(map(str, upper))]
+        elif op == '!=':
+            choices = [f'<{exact}', f'>{exact}']
+        else:
+            choices = [('=' if op == '==' else op) + exact]
+        alternatives = [(prefix + ' ' + choice).strip() for prefix in alternatives for choice in choices]
+        require(len(alternatives) <= 16, 'Python version exclusions are too complex; pin .python-version')
+    return ' || '.join(alternatives)
+
+
+def patterns_match(directory, patterns):
+    included = False
+    for pattern in patterns:
+        require(isinstance(pattern, str) and not pattern.startswith('/') and '..' not in pattern.split('/'),
+                'Workspace patterns must stay inside the checkout')
+        negative = pattern.startswith('!')
+        pattern = pattern.lstrip('!').removeprefix('./').rstrip('/')
+        def match(parts, pats):
+            if not pats:
+                return not parts
+            if pats[0] == '**':
+                return match(parts, pats[1:]) or bool(parts and match(parts[1:], pats))
+            return bool(parts and fnmatch.fnmatchcase(parts[0], pats[0]) and match(parts[1:], pats[1:]))
+        if match(directory.split('/'), pattern.split('/')):
+            included = not negative
+    return included
+
+
+def pnpm_patterns(path):
+    # Literal block/inline YAML lists only; no parser downloaded before discovery.
+    content = read(path)
+    match = re.search(r'^packages:[ \t]*(\[[^\n]*\])?[ \t]*(?:#.*)?$', content, re.M)
+    require(match, 'pnpm-workspace.yaml needs a literal packages list')
+    if match[1]:
+        values = ast.literal_eval(match[1])
+        require(isinstance(values, list), 'Unsupported pnpm packages list')
+        return values
+    values = []
+    for line in content[match.end():].splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        if not line.startswith((' ', '\t')):
+            break
+        item = re.fullmatch(r'\s+-\s+(.*?)\s*(?:\s+#.*)?', line)
+        require(item, 'Use literal pnpm workspace package paths; advanced YAML requires explicit mode')
+        value = item[1].strip()
+        if value.startswith(('"', "'")):
+            value = ast.literal_eval(value)
+        require(isinstance(value, str) and not any(c in value for c in '&{}[]'), 'Unsupported workspace pattern')
+        values.append(value)
+    require(values, 'Empty pnpm workspace packages list')
+    return values
+
+
+def safe_script(command):
+    require(isinstance(command, str) and command.strip(), 'Empty or non-string check script')
+    # Direct-mistake guard, not an arbitrary-code sandbox.
+    trimmed = re.sub(r'\bwrangler\s+deploy\b(?=[^;&|\n]*--dry-run\b)', 'wrangler local-build', command)
+    require(not re.search(r'(?i)\b(deploy|publish|release|train|training|download|curl|wget)\b', trimmed),
+            'Selected check contains deployment, release, training or download commands; use a local CI script')
+    require(not re.search(r'(?i)no test specified|passwithnotests|--if-present|\|\|\s*true', command),
+            'Selected check contains a placeholder or failure/empty-test suppression')
+
+
+def select_scripts(package, directory, manager):
+    scripts = package.get('scripts', {})
+    require(isinstance(scripts, dict), 'package.json scripts must be an object')
+    checks = []
+    for kind, names in SCRIPT_NAMES.items():
+        name = next((n for n in names if n in scripts), None)
+        if name:
+            seen = set()
+            def visit(key):
+                if key in seen:
+                    return
+                seen.add(key)
+                safe_script(scripts[key])
+                for child in re.findall(r'\b(?:npm|pnpm)\s+run\s+([\w:-]+)', scripts[key]):
+                    require(child in scripts, f'Unknown nested script: {child}')
+                    visit(child)
+            visit(name)
+            checks.append({'kind': kind, 'cwd': directory, 'argv': [manager, 'run', name],
+                           'label': f'{directory}: {name}', 'node_test': bool(re.search(r'\bnode\s+--test\b', scripts[name]))})
+    return checks
+
+
+def dep_names(values):
+    names = set()
+    for value in values:
+        require(isinstance(value, str), 'Unsupported dependency declaration')
+        match = re.match(r'([A-Za-z0-9_.-]+)', value)
+        require(match, 'Unsupported dependency name')
+        names.add(re.sub(r'[-_.]+', '-', match[1]).lower())
+    return names
+
+
+def discover(root, overrides=None):
+    overrides = overrides or {}
+    for key in ['lockfile', 'package-manager', 'package-manager-version', 'audit-command', 'docs-command', 'lightweight-node-version']:
+        require(not overrides.get(key), f'{key} belongs to explicit node/python/docs mode; auto uses standard metadata and native audits')
+    files = tracked(root)
+    names = set(files)
+    require(files, 'No committed files to check')
+    plan = {'schema': 1, 'files': files, 'checks': [], 'notes': [], 'node': None, 'python': None,
+            'locks': {}, 'root': str(root), 'tests': 'not-run', 'system_packages': overrides.get('system-packages', '')}
+    for value in plan['system_packages'].split():
+        require(re.fullmatch(r'[a-z0-9][a-z0-9+.-]*(?:=[a-zA-Z0-9:~+.-]+)?', value), 'Invalid Ubuntu package name/version')
+    unsupported = [p for p in files if Path(p).name in UNSUPPORTED or (re.fullmatch(r'requirements.*\.txt', Path(p).name) and not ('uv.lock' in names and Path(p).parent == Path('.')))]
+    require(not unsupported, f'Unsupported dependency/build metadata: {unsupported}; retain explicit mode')
+    if 'uv.lock' in names and any(re.fullmatch(r'requirements.*\.txt', p) for p in files):
+        plan['notes'].append('Native uv.lock takes precedence over root requirements*.txt; pip files are not installed or converted')
+
+    node_manifests = [p for p in files if Path(p).name == 'package.json']
+    py_manifests = [p for p in files if Path(p).name == 'pyproject.toml']
+    lock_paths = [p for p in files if Path(p).name in {*LOCKS, 'uv.lock'}]
+    package = json_file(root / 'package.json') if 'package.json' in names else None
+    pyproject = tomllib.loads(read(root / 'pyproject.toml')) if 'pyproject.toml' in names else None
+    require(not node_manifests or package is not None, 'Nested Node projects have no root workspace manifest; choose working-directory explicitly')
+    require(not py_manifests or pyproject is not None, 'Nested Python projects have no root workspace manifest; choose working-directory explicitly')
+    require('uv.lock' not in names or pyproject is not None, 'uv.lock requires root pyproject.toml')
+    require(not any(p in names for p in LOCKS) or package is not None, 'Node lock requires root package.json')
+    js_files = [p for p in files if Path(p).suffix in {'.js', '.mjs', '.cjs'}]
+    py_files = [p for p in files if p.endswith('.py')]
+    if package is not None or js_files:
+        package = package or {}
+        workspace_patterns = package.get('workspaces', [])
+        if isinstance(workspace_patterns, dict):
+            workspace_patterns = workspace_patterns.get('packages', [])
+        if 'pnpm-workspace.yaml' in names:
+            pnpm = pnpm_patterns(root / 'pnpm-workspace.yaml')
+            require(not workspace_patterns or workspace_patterns == pnpm, 'Conflicting npm/pnpm workspace declarations')
+            workspace_patterns = pnpm
+        require(isinstance(workspace_patterns, list), 'workspaces must be a list of package paths')
+        members = [str(Path(p).parent) for p in node_manifests if p != 'package.json']
+        require(all(patterns_match(p, workspace_patterns) for p in members),
+                'Nested package.json outside declared workspace; choose a root or declare workspace members')
+        root_locks = [p for p in LOCKS if p in names]
+        require(len(root_locks) <= 1, 'Ambiguous Node lockfiles; keep one authoritative root lock')
+        require(not [p for p in lock_paths if Path(p).name in LOCKS and p not in root_locks],
+                'Nested/independent Node locks are not one workspace; use separate explicit invocations')
+        packages = [('.', package)] + [(p, json_file(root / p / 'package.json')) for p in members]
+        dependencies = any(any(pkg.get(key) for key in ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies')) for _, pkg in packages)
+        require(not dependencies or root_locks, 'Node dependencies declared but no committed npm/pnpm lockfile')
+        declaration = package.get('packageManager', '')
+        manager = LOCKS[root_locks[0]] if root_locks else 'npm'
+        pm_version = ''
+        if declaration:
+            match = re.fullmatch(r'(npm|pnpm)@(\d+\.\d+\.\d+)(?:\+sha(?:224|256|384|512)\.[a-fA-F0-9]+)?', declaration)
+            require(match, 'packageManager must pin npm or pnpm to an exact x.y.z version')
+            require(not root_locks or match[1] == manager, 'packageManager conflicts with lockfile')
+            manager, pm_version = match[1], match[2]
+        if manager == 'pnpm' and not pm_version:
+            fmt = re.search(r'^lockfileVersion:\s*[\'\"]?([\d.]+)', read(root / root_locks[0]), re.M)
+            require(fmt and fmt[1] in {'9.0', '6.0'}, 'Unknown pnpm lock format; declare packageManager')
+            pm_version = {'9.0': '10.18.3', '6.0': '8.15.9'}[fmt[1]]
+            plan['notes'].append(f'No packageManager version: compatible fixed pnpm fallback {pm_version}; declare packageManager for exact intent')
+        declarations = []
+        for p in ['.nvmrc', '.node-version']:
+            if p in names:
+                declarations.append((p, version(read(root / p).strip(), 'node')))
+        if package.get('volta', {}).get('node'):
+            declarations.append(('volta.node', version(package['volta']['node'], 'node')))
+        if package.get('engines', {}).get('node'):
+            declarations.append(('engines.node', version(package['engines']['node'], 'node')))
+        selected = version(overrides['node-version'], 'node') if overrides.get('node-version') else (declarations[0][1] if declarations else '24')
+        plan['node'] = {'version': selected, 'declarations': declarations, 'manager': manager, 'manager_version': pm_version,
+                        'lock': root_locks[0] if root_locks else '', 'members': members}
+        plan['notes'].append('Node selection: ' + (('override ' if overrides.get('node-version') else declarations[0][0] + ' ') + selected if declarations or overrides.get('node-version') else 'default 24 (no declaration)'))
+        for directory, pkg in packages:
+            child_manager = pkg.get('packageManager', declaration)
+            require(not child_manager or child_manager == declaration, 'Workspace packageManager differs from root')
+            if directory != '.' and pkg.get('engines', {}).get('node'):
+                plan['node']['declarations'].append((directory + '/engines.node', version(pkg['engines']['node'], 'node')))
+            plan['checks'].extend(select_scripts(pkg, directory, manager))
+        if not dependencies and not root_locks:
+            plan['notes'].append('Node has no declared dependencies/lock: no dependency installation or vulnerability claim')
+        if not any(c['kind'] == 'test' for c in plan['checks']):
+            native_tests = [p for p in js_files if re.search(r'(?:\.test|\.spec)\.(?:c|m)?js$', p)
+                            and re.search(r'(?:require\([\"\']node:test[\"\']\)|from\s+[\"\']node:test[\"\'])', read(root / p))]
+            if native_tests:
+                plan['checks'].append({'kind': 'test', 'cwd': '.', 'argv': ['node', '--test', '--test-reporter=tap', *native_tests],
+                                       'label': 'Native node:test files', 'node_test': True})
+            else:
+                plan['notes'].append('Node tests NOT RUN: no conventional script or native node:test files')
+        if js_files:
+            plan['checks'].append({'kind': 'syntax', 'mode': 'javascript', 'files': js_files, 'label': 'JavaScript syntax (not tests)'})
+        require(not any(Path(p).suffix in {'.ts', '.tsx', '.jsx', '.vue'} for p in files) or any(c['kind'] in {'lint', 'typecheck', 'build'} for c in plan['checks']),
+                'TypeScript/JSX/Vue source needs a declared lint/typecheck/build script; Node syntax is insufficient')
+    if pyproject is not None or py_files:
+        pyproject = pyproject or {}
+        project = pyproject.get('project', {})
+        uv_config = pyproject.get('tool', {}).get('uv', {})
+        require(not ({'poetry', 'pdm'} & set(pyproject.get('tool', {}))), 'Alternative Python dependency metadata requires an explicit workflow')
+
+        require(not uv_config.get('workspace'), 'uv workspaces need an explicit workflow for member checks')
+        require(not [p for p in py_manifests if p != 'pyproject.toml'], 'Independent Python roots require explicit working-directory')
+        require(not [p for p in lock_paths if Path(p).name == 'uv.lock' and p != 'uv.lock'], 'Nested uv.lock needs explicit working-directory')
+        dependencies = project.get('dependencies', [])
+        groups = pyproject.get('dependency-groups', {})
+        require(not project.get('dynamic'), 'Dynamic Python metadata requires an explicit workflow')
+        require('uv.lock' in names or not (dependencies or groups or project.get('optional-dependencies') or uv_config.get('dev-dependencies')),
+                'Python dependencies declared without uv.lock; keep a native uv lock or use the explicit hash-pip module')
+        requires = project.get('requires-python', '')
+        selected = overrides.get('python-version') or (read(root / '.python-version').strip() if '.python-version' in names else requires or '3.13')
+        selected = version(selected, 'python')
+        selection = ['--only-group', 'ci'] if 'ci' in groups else []
+        selected_groups = ['ci'] if selection else uv_config.get('default-groups', ['dev'] if 'dev' in groups else [])
+        if selected_groups == 'all':
+            selected_groups = list(groups)
+        require(isinstance(selected_groups, list), 'Unsupported uv default-groups')
+        def group_deps(name, seen):
+            require(name in groups and name not in seen, 'Missing/cyclic dependency-group include')
+            values = []
+            for dep in groups[name]:
+                if isinstance(dep, dict):
+                    require(set(dep) == {'include-group'}, 'Unsupported dependency-group item')
+                    values.extend(group_deps(dep['include-group'], seen | {name}))
+                else:
+                    values.append(dep)
+            return values
+        selected_deps = [] if selection else list(dependencies) + uv_config.get('dev-dependencies', [])
+        for name in selected_groups:
+            selected_deps.extend(group_deps(name, set()))
+        tools = dep_names(selected_deps)
+        plan['python'] = {'version': selected, 'setup_version': python_setup_range(selected), 'requires': requires, 'uv': 'uv.lock' in names,
+                          'selection': selection, 'tools': sorted(tools)}
+        plan['notes'].append(f'Python selection: {selected}; ' + ('PEP 735 ci group only' if selection else 'project + uv default groups, no extras'))
+        plan['notes'].append('Python package build/install NOT RUN automatically; source checks do not certify a wheel')
+        if py_files:
+            plan['checks'].append({'kind': 'syntax', 'mode': 'python', 'files': py_files, 'label': 'Python syntax (not tests)'})
+        if 'ruff' in tools:
+            plan['checks'].append({'kind': 'lint', 'cwd': '.', 'argv': ['.venv/bin/python', '-m', 'ruff', 'check', '.'], 'label': 'ruff check'})
+        if 'mypy' in tools and ('mypy' in pyproject.get('tool', {}) or {'mypy.ini', '.mypy.ini'} & names):
+            plan['checks'].append({'kind': 'typecheck', 'cwd': '.', 'argv': ['.venv/bin/python', '-m', 'mypy', '.'], 'label': 'mypy'})
+        tests = [p for p in py_files if (Path(p).name.startswith('test_') or Path(p).name.endswith('_test.py')) and (len(Path(p).parts) == 1 or Path(p).parts[0] in {'test', 'tests'})]
+        if tests and 'pytest' in tools:
+            plan['checks'].append({'kind': 'test', 'mode': 'pytest', 'files': tests, 'label': 'pytest (declared dependency)'})
+        elif tests and not overrides.get('test-command'):
+            require(all(re.search(r'^\s*(?:import unittest|from unittest import)\b', read(root / p), re.M) for p in tests),
+                    'Test files found without declared pytest or explicit unittest imports; declare the runner or use test-command')
+            plan['checks'].append({'kind': 'test', 'mode': 'unittest', 'files': tests, 'label': 'stdlib unittest'})
+        else:
+            plan['notes'].append('Python tests NOT RUN automatically: no supported tracked test files')
+    require(not lock_paths or plan['node'] or plan['python'], 'Lock without a corresponding project manifest')
+    for path in lock_paths:
+        plan['locks'][path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
+    if not plan['node'] and not plan['python']:
+        document_extensions = {'.md', '.markdown', '.json', '.yaml', '.yml', '.toml', '.txt', '.rst', '.adoc',
+                               '.csv', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.pdf',
+                               '.ttf', '.otf', '.woff', '.woff2'}
+        metadata_names = {'.gitignore', '.gitattributes', '.editorconfig', 'LICENSE', 'LICENCE', 'COPYING', 'NOTICE'}
+        code = [p for p in files if Path(p).suffix.lower() not in document_extensions and Path(p).name not in metadata_names]
+        require(not code, f'Unsupported source without standard manifest: {code[:5]}')
+        docs = [p for p in files if Path(p).suffix.lower() in {'.md', '.markdown', '.json'}]
+        require(docs, 'No supported code or Markdown/JSON documents')
+        plan['checks'].append({'kind': 'docs', 'files': docs, 'label': 'Offline Markdown/JSON validation (not tests)'})
+    for kind in ['lint', 'typecheck', 'test', 'build', 'integration', 'browser']:
+        command = overrides.get(kind + '-command', '')
+        if command:
+            safe_script(command)
+            plan['checks'] = [c for c in plan['checks'] if c['kind'] != kind]
+            plan['checks'].append({'kind': kind, 'cwd': '.', 'argv': ['bash', '-e', '-o', 'pipefail', '-c', command], 'label': f'explicit {kind} command'})
+    plan['project_install_command'] = overrides.get('project-install-command', '')
+    if plan['project_install_command']:
+        safe_script(plan['project_install_command'])
+    require(plan['checks'], 'No supported checks discovered')
+    for kind in ['lint', 'typecheck', 'test', 'build']:
+        if not any(c['kind'] == kind for c in plan['checks']):
+            plan['notes'].append(f'{kind}: NOT RUN (not declared/supported); not a passing check')
+    return plan
+
+
+def run(argv, cwd, *, capture=False):
+    print('+ ' + shlex.join(map(str, argv)), flush=True)
+    result = subprocess.run(argv, cwd=cwd, text=True, stdout=subprocess.PIPE if capture else None,
+                            stderr=subprocess.STDOUT if capture else None, timeout=600)
+    if capture:
+        print(result.stdout, end='', flush=True)
+    require(result.returncode == 0, f'Command failed (exit {result.returncode}): {argv[0]}')
+    return result.stdout if capture else ''
+
+
+def node_versions(plan, root):
+    lib = subprocess.check_output(['npm', 'root', '-g'], text=True, cwd='/').strip()
+    code = 'const s=require(process.argv[1]); const rules=JSON.parse(process.argv[2]); for(const [name,range] of rules){if(!s.satisfies(process.versions.node,range)){throw Error(name+" conflicts with Node "+process.versions.node+": "+range)}}'
+    run(['node', '-e', code, str(Path(lib) / 'npm/node_modules/semver'), json.dumps(plan['node']['declarations'])], root)
+
+
+def install(plan, root):
+    if plan['system_packages']:
+        run(['sudo', 'apt-get', '-o', 'Acquire::Retries=1', '-o', 'Acquire::http::Timeout=30', 'update'], root)
+        run(['sudo', 'apt-get', '-o', 'Acquire::Retries=1', '-o', 'Acquire::http::Timeout=30', 'install', '-y', '--no-install-recommends', *plan['system_packages'].split()], root)
+    node = plan['node']
+    if node:
+        node_versions(plan, root)
+        if node['manager_version']:
+            run(['npm', 'install', '--global', '--ignore-scripts', '--no-audit', '--no-fund', node['manager'] + '@' + node['manager_version']], root)
+        actual = subprocess.check_output([node['manager'], '--version'], cwd=root, text=True).strip()
+        require(not node['manager_version'] or actual == node['manager_version'], 'Package manager version mismatch')
+        if node['lock']:
+            cmd = ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'] if node['manager'] == 'npm' else ['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts', '--store-dir', os.environ['CI_NODE_STORE']]
+            run(cmd, root)
+    python = plan['python']
+    if python and python['requires']:
+        run(['python', '-I', '-c', 'import sys; from pip._vendor.packaging.specifiers import SpecifierSet; assert SpecifierSet(sys.argv[1]).contains(".".join(map(str,sys.version_info[:3]))), "Python conflicts with requires-python"', python['requires']], root)
+    if python and python['uv']:
+        run(['uv', 'export', '--locked', *python['selection'], '--no-emit-project', '--no-emit-workspace', '--no-hashes', '--no-header', '--output-file', os.environ['CI_AUTO_DIR'] + '/selected.txt'], root)
+        selected = set()
+        for line in Path(os.environ['CI_AUTO_DIR'], 'selected.txt').read_text().splitlines():
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            match = re.match(r'^([\w.-]+)==[^ ;]+', line)
+            require(match, 'Auto uv supports registry dependencies only; local/VCS/URL dependencies need explicit mode')
+            selected.add(re.sub(r'[-_.]+', '-', match[1]).lower())
+        lock = tomllib.loads(read(root / 'uv.lock'))
+        total = 0
+        for pkg in lock.get('package', []):
+            if pkg['name'] not in selected:
+                continue
+            require(not re.search(r'(^nvidia-|cuda|cudnn)', pkg['name'], re.I), 'GPU dependency selected; declare a lightweight CPU ci dependency-group')
+            wheels = pkg.get('wheels', [])
+            require(wheels, f'No locked wheels for {pkg["name"]}; auto uv never builds third-party source distributions')
+            size = max((w.get('size', MAX_FILE * 100) for w in wheels), default=0)
+            require(size <= 100 * 1024 * 1024, f'Large locked distribution for {pkg["name"]}; use a lightweight CPU ci group')
+            total += size
+        require(total <= 500 * 1024 * 1024, 'Selected lock exceeds conservative 500 MiB budget; use a CPU ci group')
+        run(['uv', 'sync', '--locked', *python['selection'], '--no-install-project', '--no-build', '--python', shutil.which('python')], root)
+    if plan.get('project_install_command'):
+        run(['bash', '-e', '-o', 'pipefail', '-c', plan['project_install_command']], root)
+    unchanged(plan, root)
+
+
+def unchanged(plan, root):
+    for path, digest in plan['locks'].items():
+        require(hashlib.sha256((root / path).read_bytes()).hexdigest() == digest, f'Lock changed during CI: {path}')
+
+
+def test_report(path):
+    report = ET.parse(path).getroot()
+    cases = list(report.iter('testcase'))
+    require(cases, 'No executed test cases in JUnit report')
+    require(not any(c.find('skipped') is not None for c in cases), 'Skipped tests detected; provision missing prerequisites or retain an explicit test contract')
+    require(not any(c.find('failure') is not None or c.find('error') is not None for c in cases), 'JUnit contains failed tests')
+    return len(cases)
+
+
+def check_docs(root, files):
+    from urllib.parse import urlsplit, unquote
+    for value in files:
+        path = root / value
+        content = read(path)
+        if path.suffix.lower() == '.json':
+            json_file(path)
+            continue
+        content = re.sub(r'(?ms)^\s*' + chr(96)*3 + r'.*?^\s*' + chr(96)*3 + r'\s*$|^\s*~~~.*?^\s*~~~\s*$', '', content)
+        content = re.sub(chr(96) + r'[^' + chr(96) + r'\n]*' + chr(96), '', content)
+        for link in re.findall(r'\[[^\]\n]*\]\(<?([^\s)>]+)>?(?:\s+["\'][^\n]*["\'])?\)', content):
+            url = urlsplit(link)
+            if url.scheme or url.netloc or not url.path or url.path.startswith('/'):
+                continue
+            target = (path.parent / unquote(url.path)).resolve()
+            require(target.is_relative_to(root) and target.exists(), f'Missing/outside local link in {value}: {link}')
+
+
+def execute(plan, root, state_file):
+    if plan['python'] and plan['python']['uv']:
+        os.environ['PATH'] = str(root / '.venv/bin') + os.pathsep + os.environ['PATH']
+    state = {'checks': [], 'tests': 'not-run', 'complete': False}
+    def save():
+        state_file.write_text(json.dumps(state, indent=2) + '\n')
+    save()
+    try:
+        for check in plan['checks']:
+            record = {'kind': check['kind'], 'label': check['label'], 'result': 'running'}
+            state['checks'].append(record)
+            save()
+            mode = check.get('mode')
+            if mode == 'javascript':
+                for path in check['files']:
+                    run(['node', '--check', path], root)
+            elif mode == 'python':
+                run([shutil.which('python'), '-I', '-c', 'import sys; from pathlib import Path; [compile(Path(p).read_bytes(),p,"exec") for p in sys.argv[1:]]', *check['files']], root)
+            elif mode == 'pytest':
+                report = state_file.parent / 'pytest.xml'
+                run(['.venv/bin/python', '-m', 'pytest', *check['files'], '-q', '--junitxml=' + str(report)], root)
+                record['executed_tests'] = test_report(report)
+                state['tests'] = 'executed'
+            elif mode == 'unittest':
+                runner = 'import sys,unittest; s=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromName(p[:-3].replace("/",".")) for p in sys.argv[1:]); r=unittest.TextTestRunner(verbosity=2).run(s); sys.exit(0 if r.testsRun>0 and r.wasSuccessful() and not r.skipped else 1)'
+                python = str(root / '.venv/bin/python') if plan['python']['uv'] else shutil.which('python')
+                run([python, '-c', runner, *check['files']], root)
+                state['tests'] = 'executed'
+            elif check['kind'] == 'docs':
+                check_docs(root, check['files'])
+            else:
+                output = run(check['argv'], root / check['cwd'], capture=check['kind'] == 'test')
+                if check['kind'] == 'test':
+                    if check.get('node_test'):
+                        counts = re.findall(r'(?:#|ℹ) tests (\d+)', output)
+                        require(counts and sum(map(int, counts)) > 0, 'Node test runner reported no test cases')
+                        require(not re.search(r'(?:#|ℹ) (?:skipped|todo) [1-9]', output), 'Node test runner skipped tests/todo; explicit prerequisites required')
+                        state['tests'] = 'executed'
+                    else:
+                        state['tests'] = 'command-passed-count-unknown'
+            record['result'] = 'success'
+            save()
+        node = plan['node']
+        if node and node['lock']:
+            state['checks'].append({'kind': 'audit', 'label': node['manager'] + ' audit high/critical', 'result': 'running'})
+            save()
+            run([node['manager'], 'audit', '--audit-level=high'], root)
+            state['checks'][-1]['result'] = 'success'
+        if plan['python'] and plan['python']['uv']:
+            state['checks'].append({'kind': 'audit', 'label': 'uv audit (all advisories, full lock)', 'result': 'running'})
+            save()
+            run(['uv', 'audit', '--locked'], root)
+            state['checks'][-1]['result'] = 'success'
+        unchanged(plan, root)
+        state['complete'] = True
+    finally:
+        for check in state['checks']:
+            if check['result'] == 'running':
+                check['result'] = 'failure'
+        save()
+    return state
+
+
+def summary(plan, state):
+    lines = ['## Automatic CI evidence', '', 'Passing this gate means the discovered checks completed; it does not create missing test coverage.', '']
+    for key in ['node', 'python']:
+        if plan.get(key):
+            lines.append(f'- {key}: requested {plan[key]["version"]}')
+    lines += ['', '| Check | Result |', '| --- | --- |']
+    results = {c['label']: c for c in state.get('checks', [])}
+    for check in plan.get('checks', []):
+        result = results.get(check['label'], {}).get('result', 'not-run')
+        lines.append(f'| {check["label"].replace("|", "/")} | {result} |')
+    for check in state.get('checks', []):
+        if check['kind'] == 'audit':
+            lines.append(f'| {check["label"]} | {check["result"]} |')
+    lines += ['', f'Tests: **{state.get("tests", "not-run")}**', '']
+    lines.extend('- ' + note for note in plan.get('notes', []))
+    return '\n'.join(lines) + '\n'
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('stage', choices=['detect', 'install', 'execute', 'summary'])
+    args = parser.parse_args()
+    folder = Path(os.environ['CI_AUTO_DIR'])
+    folder.mkdir(parents=True, exist_ok=True)
+    plan_file, state_file = folder / 'plan.json', folder / 'state.json'
+    if args.stage == 'detect':
+        workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+        relative = os.environ.get('CI_WORKING_DIRECTORY', '.')
+        require(not Path(relative).is_absolute() and '..' not in Path(relative).parts, 'working-directory must be inside checkout')
+        root = workspace / relative
+        require(root.is_dir() and root.resolve().is_relative_to(workspace) and not root.is_symlink(), 'Invalid working-directory')
+        require(float(os.environ.get('CI_TIMEOUT', '15')).is_integer() and 1 <= float(os.environ.get('CI_TIMEOUT', '15')) <= 45,
+                'timeout-minutes must be an integer from 1 to 45')
+        plan = discover(root.resolve(), json.loads(os.environ.get('CI_OVERRIDES', '{}')))
+        plan_file.write_text(json.dumps(plan, indent=2) + '\n')
+        node, python = plan['node'], plan['python']
+        outputs = {'node-version': node['version'] if node else '', 'python-version': python['setup_version'] if python else '',
+                   'uv': str(bool(python and python['uv'])).lower(), 'node-lock': str(bool(node and node['lock'])).lower(),
+                   'node-manager': (node['manager'] + '-' + (node['manager_version'] or 'bundled')) if node else '',
+                   'lock-key': hashlib.sha256(json.dumps(plan['locks'], sort_keys=True).encode()).hexdigest()}
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            for name, value in outputs.items():
+                require('\n' not in value, 'Invalid multiline output')
+                output.write(f'{name}={value}\n')
+        print(summary(plan, {}))
+    else:
+        if not plan_file.exists() and args.stage == 'summary':
+            with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+                output.write('Automatic discovery failed; no quality/test success is claimed. See discovery error.\n')
+            return
+        plan = json_file(plan_file)
+        root = Path(plan['root'])
+        if args.stage == 'install':
+            install(plan, root)
+        elif args.stage == 'execute':
+            execute(plan, root, state_file)
+        else:
+            state = json_file(state_file) if state_file.exists() else {}
+            with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+                output.write(summary(plan, state))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (Invalid, ValueError, OSError, subprocess.SubprocessError) as error:
+        print(f'Automatic CI error: {error}', file=sys.stderr)
+        raise SystemExit(1)

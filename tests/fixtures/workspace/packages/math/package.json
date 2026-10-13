@@ -1,0 +1,7 @@
+{
+  "name": "workspace-math",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node --test --test-reporter=tap math.test.cjs"
+  }
+}
