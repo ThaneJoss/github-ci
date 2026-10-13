@@ -62,6 +62,31 @@ class Fixtures(unittest.TestCase):
         with self.assertRaises(auto.Invalid):
             auto.python_setup_range('~=3')
 
+    def test_zero_required_inputs(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+        inputs = workflow['on']['workflow_call']['inputs']
+        self.assertEqual(inputs['profile']['default'], 'auto')
+        self.assertFalse(any(value.get('required', False) for value in inputs.values()))
+
+    def test_lock_mutation_fails(self):
+        self.package()
+        self.put('package-lock.json', {})
+        plan = self.detect()
+        self.put('package-lock.json', {'mutated': True})
+        with self.assertRaisesRegex(auto.Invalid, 'Lock changed'):
+            auto.unchanged(plan, self.root)
+
+    def test_unknown_stack_does_not_become_docs_green(self):
+        self.put('README.md', 'content\n')
+        self.put('go.mod', 'module generic.invalid/service\n')
+        with self.assertRaisesRegex(auto.Invalid, 'Unsupported'):
+            self.detect()
+
+    def test_native_tests_without_package_script(self):
+        self.package()
+        self.put('small.test.cjs', "const test = require('node:test'); test('real',()=>{});\n")
+        self.assertTrue(any(c.get('node_test') for c in self.detect()['checks']))
+
     def test_pnpm_fallback(self):
         self.package()
         self.put('pnpm-lock.yaml', "lockfileVersion: '9.0'\n")

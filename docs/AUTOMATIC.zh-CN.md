@@ -54,7 +54,7 @@ uv 原生锁保留不动。sync 使用 --no-build --no-install-project：仅安�
 
 预检选中依赖后，拒绝 GPU 标识依赖、单包最大锁定 wheel 超过 100 MiB、保守总量超过 500 MiB、缺少 size/wheel，以及直接 URL/VCS/本地依赖。不自动切 CPU 源或删 CUDA 依赖，不要求重做整份锁；可复用已有标准 ci dependency-group。上限取选中包锁中最大的 wheel，跨平台包可能保守拒绝。uv audit 检查完整锁的已知漏洞；即使轻量组排除了某些运行时依赖，也不默认豁免完整锁。漏洞或审计服务错误都失败。
 
-不存在通用标准能可靠说明 pytest 需要 7zz、数据库、浏览器或 GPU；模板不会猜 runner 已有这些工具。可选 system-packages 接受 Ubuntu 包名（可带版本），例如 7zip；apt 只重试一次，调用代码不获得云凭据。缺工具应失败；已识别的 skip 也失败。模板内部设置常见模型库离线变量，但这不是所有网络下载的通用沙箱。
+不存在通用标准能可靠说明 pytest 需要 7zz、数据库、浏览器或 GPU；模板不会猜 runner 已有这些工具。可选 system-packages 接受 Ubuntu 包名（可带版本），例如 7zip-standalone；apt 只重试一次，调用代码不获得云凭据。缺工具应失败；已识别的 skip 也失败。模板内部设置常见模型库离线变量，但这不是所有网络下载的通用沙箱。
 
 ## 明确不支持的自动结构
 

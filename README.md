@@ -22,7 +22,7 @@ GitHub 仍需要这个 caller 文件、基础权限，以及仓库自身正常�
 
 入口内置取消旧 run、超时和严格 `Gate`；通常一个 Quality runner 安装一次，再用一个短 Gate runner 汇总。首次成功运行后，按 GitHub 实际显示的 `ci / Gate` 名称设置 required check，并确认没有同名工作流。不要给 caller 的 `ci` job 加条件跳过，也不要用顶层 paths 过滤 required workflow。
 
-特殊系统依赖可加一个可选 input，例如 `with: {system-packages: 7zip}`。特殊检查、版本矩阵、多独立根目录和 wheel 安装验证仍需项目明确表达，不能自动猜测。原有 `profile: node/python/docs` 与独立模块保留为显式接口；原五个 examples 是旧版显式接入示例，不是新的主路径，也不要求自动模式复制 helper。
+特殊系统依赖可加一个可选 input，例如 `with: {system-packages: 7zip-standalone}`。特殊检查、版本矩阵、多独立根目录和 wheel 安装验证仍需项目明确表达，不能自动猜测。原有 `profile: node/python/docs` 与独立模块保留为显式接口；原五个 examples 是旧版显式接入示例，不是新的主路径，也不要求自动模式复制 helper。
 
 模板只按能力判断，不读取 owner/repo/项目名称；参见[可移植性契约](docs/PORTABILITY.zh-CN.md)。Actions 固定 SHA，嵌套 workflow 固定同一版本，自动运行时代码直接内嵌在被调用的 workflow 中，不执行 caller 的同名模板文件，也不追踪 main 下载脚本。调用方代码只在无 secret、contents:read 的 GitHub 托管 runner 上运行。
 

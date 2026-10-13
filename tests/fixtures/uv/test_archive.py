@@ -10,7 +10,7 @@ import six
 class ArchiveTests(unittest.TestCase):
     def test_archive_tool_and_small_fixture(self):
         executable = shutil.which("7zz")
-        self.assertIsNotNone(executable, "7zz required: system-packages: 7zip; never skip")
+        self.assertIsNotNone(executable, "7zz required: system-packages: 7zip-standalone; never skip")
         self.assertIsInstance("42", six.string_types)
         with tempfile.TemporaryDirectory() as folder:
             archive = Path(folder) / "small.zip"

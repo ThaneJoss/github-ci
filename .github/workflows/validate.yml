@@ -66,8 +66,9 @@ jobs:
           - {fixture: npm, packages: ''}
           - {fixture: pnpm, packages: ''}
           - {fixture: plugin, packages: ''}
-          - {fixture: uv, packages: '7zip'}
+          - {fixture: uv, packages: '7zip-standalone'}
           - {fixture: stdlib, packages: ''}
+          - {fixture: python-patch, packages: ''}
           - {fixture: docs, packages: ''}
           - {fixture: no-tests, packages: ''}
           - {fixture: workspace, packages: ''}

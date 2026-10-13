@@ -81,7 +81,7 @@ name: Reusable CI
         type: string
         default: ''
       system-packages:
-        description: Optional Ubuntu packages for tests, e.g. 7zip.
+        description: Optional Ubuntu packages for tests, e.g. 7zip-standalone.
         type: string
         default: ''
     outputs:
