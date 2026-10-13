@@ -127,7 +127,7 @@ Gate使用`if: always()`，显式读取每个直接依赖的`needs.<id>.result`�
 
 私有模板给其它仓库开放后，该caller的外部协作者可能通过运行日志间接看到内容，不能当作隔离秘密的容器。此任务选定公开`ThaneJoss/github-ci`，因此公开包仅含泛用逻辑；调研报告与私有项目证据必须留在独立内部附件，禁止整体上传工作区。
 
-首次发布后把示例的40个0替换为**真实模板commit SHA**；该占位不是有效版本，不应直接启用。发布`v1.0.0`便于人读，生产caller仍固定完整SHA；升级由普通PR更新SHA和版本注释，审阅变化、在试点跑真实GitHub检查再扩散。可选择可移动`v1`便利升级，但需接受上游更新立即影响所有caller的风险，不作为默认。回滚是caller改回已验证SHA，不重写历史tag。
+当前示例固定首次公开commit `835d0365f1a05d53f1a3c49fa38d907ee3828093`。尚未创建版本tag；未来可发布`v1.0.0`便于人读，生产caller仍固定完整SHA；升级由普通PR更新SHA和版本注释，审阅变化、在试点跑真实GitHub检查再扩散。可选择可移动`v1`便利升级，但需接受上游更新立即影响所有caller的风险，不作为默认。回滚是caller改回已验证SHA，不重写历史tag。
 
 复用工作流中的checkout检出caller仓库，而不是模板仓库；这里核心模块脚本内嵌，辅助脚本须显式复制给caller，不能假设模板的scripts已出现。caller `uses`位置不能用表达式动态拼仓库/版本。inputs类型必须一致，secrets显式传递且不自动跨嵌套继承。完整官方核对在内部附件`reports/github-semantics.md`，可公开参考[重用工作流](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)、[工作流语法](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)、[避免required检查挂起](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/troubleshooting-required-status-checks)。
 

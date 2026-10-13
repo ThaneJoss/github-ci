@@ -1,6 +1,6 @@
-# github-ci：可复用 CI 候选模板
+# github-ci：按能力复用的 CI
 
-本仓库是 `ThaneJoss/github-ci` 的通用 CI 实现。发布与执行证据见[验证记录](docs/VALIDATION.zh-CN.md)。四个 `.github/workflows/*.yml` 是真正的 `workflow_call` 工作流。`examples/*.yml` 是调用方接入样例，其中 **40 个零必须替换为首次发布并审阅后的真实模板 commit SHA**，项目命令与依赖锁也必须适配。不能把静态检查通过称为 GitHub 执行通过。
+本仓库是 `ThaneJoss/github-ci` 的通用 CI 实现。发布与执行证据见[验证记录](docs/VALIDATION.zh-CN.md)。四个 `.github/workflows/*.yml` 是真正的 `workflow_call` 工作流。`examples/*.yml` 是调用方接入样例，已固定首次发布的真实模板commit；项目命令与依赖锁必须按调用方适配。不能把静态检查通过称为 GitHub 执行通过。
 
 ## 流程约束
 
@@ -8,8 +8,8 @@
 
 ## 接入
 
-1. 把模板仓库的四个工作流发布在同一个 commit。`ci.yml` 通过相对 `uses: ./.github/workflows/*.yml` 引用该 commit 的子工作流。
-2. 在调用仓库选择 `examples/web-npm.yml`、`worker-pnpm.yml`、`python-cpu.yml`、`docs.yml` 或零依赖插件的 `plugin-no-deps.yml`，复制为 `.github/workflows/ci.yml`，替换全零 SHA，并只保留适用的真实检查命令。调用方命令执行在调用仓库的 checkout；不会自动获得模板仓库的脚本。
+1. 示例固定模板commit `835d0365f1a05d53f1a3c49fa38d907ee3828093`；`ci.yml`通过相对`uses: ./.github/workflows/*.yml`引用同一commit的子工作流。升级时审阅并替换完整SHA。
+2. 在调用仓库选择 `examples/web-npm.yml`、`worker-pnpm.yml`、`python-cpu.yml`、`docs.yml` 或零依赖插件的 `plugin-no-deps.yml`，复制为 `.github/workflows/ci.yml`，并只保留适用的真实检查命令。调用方命令执行在调用仓库的 checkout；不会自动获得模板仓库的脚本。
 3. `docs.yml` 样例还需把 `examples/helpers/check_docs.py` 复制为调用仓库的 `.github/scripts/check_docs.py`。审计例外辅助工具如被选用，也需复制到调用仓库；默认 Node 门禁可直接使用包管理器 audit。
 4. 首次实际运行验证之后，再把**唯一的 `Gate`** 设为 required check；本次交付没有修改任何分支保护。工作流显示名 `CI`、可复用 job 名 `CI` 不改变最终顶层 job 的 `name: Gate`。仓库内其他工作流不要复用 `Gate` 名称。
 
@@ -71,7 +71,7 @@ Python 使用新建 `.venv-ci`，安装 `pip --require-hashes --only-binary=:all
 
 - [完整中文设计](docs/DESIGN.zh-CN.md)
 - [Action SHA与官方来源](docs/action-pins.json)
-- [本次静态验证范围](docs/VALIDATION.zh-CN.md)
+- [验证记录与边界](docs/VALIDATION.zh-CN.md)
 
 - [大型公开项目实践与采用理由](docs/INDUSTRY-PRACTICES.zh-CN.md)
 - [不按项目身份分流的本地检查](tools/check_portability.py)
