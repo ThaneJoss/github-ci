@@ -46,6 +46,13 @@ for checks, docs, passed in itertools.product(['success', 'failure', 'cancelled'
 assert steps[1]['if'] == '${{ cancelled() }}'
 assert subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', steps[1]['run']], capture_output=True).returncode != 0
 gate_count += 1
+for state, proof in itertools.product(['success', 'failure', 'cancelled', 'skipped', ''], ['true', 'false', '']):
+    env = {**os.environ, 'CHECKS_RESULT': 'success', 'DOCS_RESULT': 'success', 'DOCS_PASSED': 'true',
+           'FIXTURES_RESULT': state, 'FIXTURES_PASSED': proof}
+    run = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', steps[0]['run']], env=env, capture_output=True)
+    assert (run.returncode == 0) == (state == 'success' and proof == 'true')
+    gate_count += 1
+
 for helper in [*ROOT.glob('examples/helpers/*.py'), *ROOT.glob('tools/*.py'), *ROOT.glob('tools/auto/*.py')]:
     ast.parse(helper.read_text())
 print(f'PASS: {len(files)} YAML files; {bash_count} bash blocks; {inline_count} inline Python blocks; {gate_count} Gate cases.')

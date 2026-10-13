@@ -13,7 +13,7 @@ permissions:
   contents: read
 jobs:
   ci:
-    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@63e12ec72021893f22a8d45386dd4ab451fd1151
+    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@ae3905e0f5782edd68b2f201f42b075b55941013
 ```
 
 GitHub 仍需要这个 caller 文件、基础权限，以及仓库自身正常的 manifest/锁/测试。模板不会凭空生成测试或豁免漏洞。升级时审阅并更换完整 SHA；此 PR 未合并，固定提交仍可引用。

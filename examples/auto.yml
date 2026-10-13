@@ -10,4 +10,4 @@ permissions:
   contents: read
 jobs:
   ci:
-    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@63e12ec72021893f22a8d45386dd4ab451fd1151
+    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@ae3905e0f5782edd68b2f201f42b075b55941013
