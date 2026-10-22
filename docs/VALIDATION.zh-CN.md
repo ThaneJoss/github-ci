@@ -27,6 +27,14 @@ Gate真值表覆盖 success/failure/cancelled/skipped/缺失输出，以及未�
 
 Actions 来源及固定 SHA 沿用 [action-pins.json](action-pins.json)。actionlint 1.7.12 下载校验固定 SHA256；PyYAML 通过 require-hashes 安装。未启用 ShellCheck，不宣称 bash -n 等于完整 shell 语义审计。
 
+## pnpm 启动兼容回归
+
+`python tools/auto/smoke_package_manager.py` 在临时目录中安装 Node 所带 npm 的同版本副本、npm 11.6.0、pnpm 8.15.9/10.18.3/12.4.2/12.14.0，读取实际 auto.yml 的安全环境设置，并以独立进程执行生产控制器的 detect/install/execute。每种版本验证冻结安装、嵌套 node:test、high/critical 审计、安装及 pre/post hooks 禁用、测试失败不完成、锁不匹配明确拒绝且原锁不变。旧 npm/pnpm 使用现有 fixture，pnpm 8/12 使用各版本实际生成并提交的原生锁。测试不修改宿主工具链；pnpm 启动器的备用下载在此 smoke 中关闭。
+
+离线启动回归覆盖无 shebang shell、旧 shebang、原生 executable、特殊字符/空参数原样传递、非零退出、版本不符、版本查询/安装/脚本/审计完整调用路径、npm 直通及 Yarn 既有拒绝。CI 保留原有 fixtures 和 Gate，新增真实版本 smoke；最终 head 的远端结果以 PR Checks 为准。
+
+这组回归证明 Ubuntu/Node 24 下的模板启动兼容和轻量冻结安装，不证明调用业务项目已经恢复；调用方仍需更换固定 SHA 并完成自身检查。
+
 ## 未测与不可代替的边界
 
 未创建外部 caller 仓库，也未改业务项目，因此**跨仓调用、fork权限、旧多版本/多系统矩阵等价性、真实科研/应用覆盖、GPU训练、云平台、浏览器/部署验收、私有registry和整个run中途取消**未验收。自动模式的失败产物策略是不上传，不假称完成了各种第三方报告脱敏。
