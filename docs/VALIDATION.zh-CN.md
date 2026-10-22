@@ -8,7 +8,7 @@
 
 实际发现并修复了两类集成问题：setup-python 需要把 PEP 440 范围转换成 semver；7zz 所需包为 7zip-standalone，不能假定 7zip 包或 runner 自带满足测试。失败 run 的自动分支及汇总 Gate 都保持失败，未用忽略错误或跳过测试处理。
 
-本版示例固定的运行时代码提交为 `a02b1a7b15ddb68b5fc01b93995154ee2147d0a0`，包含本轮六项审查修复；对应 [Template validation run 39747738335](https://github.com/ThaneJoss/github-ci/actions/runs/39747738335) 已通过，55 项自动回归、47 项 helper 测试、33 项可移植性用例及 22 个实际执行 job 全部成功（40 个未选 profile job 按设计 skipped）；最终 head 与全部检查的验收记录见 [PR #1](https://github.com/ThaneJoss/github-ci/pull/1) 的提交及 Checks，避免在 commit 中循环引用自身 SHA。PR 未合并，没有改业务仓库或分支保护。
+历史验证提交 `a02b1a7b15ddb68b5fc01b93995154ee2147d0a0` 包含当轮六项审查修复；对应 [Template validation run 39747738335](https://github.com/ThaneJoss/github-ci/actions/runs/39747738335) 已通过，55 项自动回归、47 项 helper 测试、33 项可移植性用例及 22 个实际执行 job 全部成功（40 个未选 profile job 按设计 skipped）；该轮最终 head 与全部检查的验收记录见 [PR #1](https://github.com/ThaneJoss/github-ci/pull/1) 的提交及 Checks。此 SHA 仅用于定位历史证据；当前 README 和示例默认使用 `@main`，后续版本须查看各自提交的 Checks，不能沿用旧 run 作为最新版本的通过证明。当轮记录时 PR 尚未合并，也未改业务仓库或分支保护。
 
 ## 回归覆盖
 
@@ -33,7 +33,7 @@ Actions 来源及固定 SHA 沿用 [action-pins.json](action-pins.json)。action
 
 离线启动回归覆盖无 shebang shell、旧 shebang、原生 executable、特殊字符/空参数原样传递、非零退出、版本不符、版本查询/安装/脚本/审计完整调用路径、npm 直通及 Yarn 既有拒绝。CI 保留原有 fixtures 和 Gate，新增真实版本 smoke；最终 head 的远端结果以 PR Checks 为准。
 
-这组回归证明 Ubuntu/Node 24 下的模板启动兼容和轻量冻结安装，不证明调用业务项目已经恢复；调用方仍需更换固定 SHA 并完成自身检查。
+这组回归证明 Ubuntu/Node 24 下的模板启动兼容和轻量冻结安装，不证明调用业务项目已经恢复；使用 `@main` 的调用方须新触发并完成自身检查，仍固定旧 SHA 的调用方须先更新引用。
 
 ## 未测与不可代替的边界
 
@@ -43,4 +43,4 @@ Actions 来源及固定 SHA 沿用 [action-pins.json](action-pins.json)。action
 
 ## 首次显式模块发布（历史证据）
 
-初始提交 [835d0365f1a05d53f1a3c49fa38d907ee3828093](https://github.com/ThaneJoss/github-ci/commit/835d0365f1a05d53f1a3c49fa38d907ee3828093) 的 [run 38344010586](https://github.com/ThaneJoss/github-ci/actions/runs/38344010586) 验证了显式 docs 嵌套调用成功路径。原五个显式 caller examples 仍固定此旧提交；它们不是自动入口的完整实测证据。行业来源、设计、安全和成本讨论继续保留在对应文档中。
+初始提交 [835d0365f1a05d53f1a3c49fa38d907ee3828093](https://github.com/ThaneJoss/github-ci/commit/835d0365f1a05d53f1a3c49fa38d907ee3828093) 的 [run 38344010586](https://github.com/ThaneJoss/github-ci/actions/runs/38344010586) 验证了显式 docs 嵌套调用成功路径。五个显式 caller examples 当时固定此提交，现已默认使用 `@main`；该历史 run 不是当前示例或自动入口的完整实测证据。行业来源、设计、安全和成本讨论继续保留在对应文档中。
