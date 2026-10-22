@@ -95,6 +95,19 @@ if args[:1] == [os.environ.get('PM_FAIL_COMMAND', 'fail')]:
         self.launcher(shebang=True)
         self.assertEqual(auto.run(['pnpm', '--version'], self.root, capture=True), '12.14.0\n')
 
+    def test_project_bash_on_path_cannot_intercept_pnpm(self):
+        self.launcher()
+        # execute() prepends .venv/bin for mixed Python/Node projects. A Python
+        # console script named bash must not replace the runner's fallback shell.
+        venv_bin = self.root / '.venv/bin'
+        venv_bin.mkdir(parents=True)
+        shadow = venv_bin / 'bash'
+        shadow.write_text('#!/bin/sh\nexit 0\n')
+        shadow.chmod(0o755)
+        with patch.dict(os.environ, {'PATH': str(venv_bin) + os.pathsep + os.environ['PATH']}):
+            self.assertEqual(auto.run(['pnpm', '--version'], self.root, capture=True), '12.14.0\n')
+        self.assertEqual(self.calls()[0]['args'], ['--version'])
+
     def test_native_executable_still_runs(self):
         native = Path('/bin/echo')
         self.assertEqual(native.read_bytes()[:4], b'\x7fELF')

@@ -557,7 +557,8 @@ jobs:
               # pnpm 12 ships a shebang-less shell launcher when lifecycle scripts are
               # disabled. Python exec does not provide the shell's ENOEXEC fallback.
               # Keep the shell program fixed: every command/argument stays a literal argv.
-              return ['bash', '-c', 'exec "$@"', '--', *argv] if argv[0] == 'pnpm' else argv
+              # The runner's absolute shell cannot be shadowed by a caller's .venv/bin.
+              return ['/bin/bash', '-c', 'exec "$@"', '--', *argv] if argv[0] == 'pnpm' else argv
 
 
           def run(argv, cwd, *, capture=False):
