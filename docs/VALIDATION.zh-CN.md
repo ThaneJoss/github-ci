@@ -8,7 +8,7 @@
 
 实际发现并修复了两类集成问题：setup-python 需要把 PEP 440 范围转换成 semver；7zz 所需包为 7zip-standalone，不能假定 7zip 包或 runner 自带满足测试。失败 run 的自动分支及汇总 Gate 都保持失败，未用忽略错误或跳过测试处理。
 
-本版示例固定的运行时代码提交为 `1e1853de35edcace1a1a87ad2458aec47bd07861`，增加原生 uv.lock 优先于根 requirements*.txt 导出文件的支持；最终 head 与全部检查的验收记录见 [PR #1](https://github.com/ThaneJoss/github-ci/pull/1) 的提交及 Checks，避免在 commit 中循环引用自身 SHA。PR 未合并，没有改业务仓库或分支保护。
+本版示例固定的运行时代码提交为 `a02b1a7b15ddb68b5fc01b93995154ee2147d0a0`，包含本轮六项审查修复；对应 [Template validation run 39747738335](https://github.com/ThaneJoss/github-ci/actions/runs/39747738335) 已通过，55 项自动回归、47 项 helper 测试、33 项可移植性用例及 22 个实际执行 job 全部成功（40 个未选 profile job 按设计 skipped）；最终 head 与全部检查的验收记录见 [PR #1](https://github.com/ThaneJoss/github-ci/pull/1) 的提交及 Checks，避免在 commit 中循环引用自身 SHA。PR 未合并，没有改业务仓库或分支保护。
 
 ## 回归覆盖
 
