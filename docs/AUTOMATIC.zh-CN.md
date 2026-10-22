@@ -31,6 +31,29 @@ quality-passed=true 表示本次计划中的检查和原生审计全部成功，
 
 pnpm workspace YAML 支持常见字面 block 列表或带引号的 inline 列表，路径 glob 支持 *、** 和 ! 排除，不支持 YAML 锚点/标签。* 不跨目录。共享锁成员顺序检查，根脚本已递归执行时可能有重复；模板不猜根脚本覆盖了哪些成员。
 
+## 文件格式与辅助源码
+
+格式识别与 Node/Python 工程识别相互独立：在任意目录、同根混合工程及已声明的 workspace 成员中，对所有跟踪到的受支持文件安排真实检查，不以某个成员的测试通过代替其他文件校验。格式检查位于应用检查之前，属于不能被 lint/test/build-command 覆盖的独立能力；失败或工具缺失不产生完成证明。只有格式的仓库也能执行静态检查，仍显示 tests=not-run。
+
+| 识别依据 | 实际校验 | 覆盖边界 |
+| --- | --- | --- |
+| `.json`、`.jsonc` | 严格 JSON 解析；JSONC 词法扫描保留字符串，移除注释后解析 | JSONC 支持 `//`、`/* */` 和单个尾逗号扩展；拒绝重复键、NaN/Infinity、缺值和未闭合注释；不支持 JSON5 的单引号或无引号键，不验证应用 schema |
+| `.toml` | Python `tomllib` | TOML 语法，非应用配置语义 |
+| `.env`、`.env.*`、`.dev.vars`、`.dev.vars.*`、`*.env` | NAME=value 赋值文法，允许 export、注释、空值和单/双引号多行值 | 名称为 `[A-Za-z_][A-Za-z0-9_]*`；拒绝重复名称、未闭合引号及引号后的额外文本；不执行、不加载进环境、不插值；不是 Shell 脚本，也不保证每种 dotenv 库的转义语义相同 |
+| `.xml`、`.svg` | ElementTree 完整文档解析 | 拒绝 DTD/实体声明，不读取外部资源；不是 XML Schema、sitemap 语义或 SVG 安全净化 |
+| 任意目录的 `_headers` | 路由块、HTTP field-name、附加/删除字段语法 | 支持绝对路径或 HTTPS URL、单个 splat 和命名占位符；100 条规则、每行 2000 字符；不验证 CSP 等每种响应头的业务语义，不进行 HTTP 请求 |
+| 任意目录的 `.gitignore`、`.assetsignore` | 固定 pathspec 1.1.1 编译 Gitignore 模式，拒绝控制字符和编译错误 | Gitignore 是宽松的逐行路径模式格式；检查不证明排除规则符合部署意图，也不会用这些规则跳过 CI 中的已跟踪源码 |
+| 任意目录的 `.nojekyll` | 必须零内容 | 这是 GitHub Pages 的标准空标记；其他无内容陌生文件并不因此获得豁免 |
+| `.sh`、`.bash`，或明确 sh/dash/bash shebang 的未知文件名 | Bash `--noprofile --norc -n` 或 Dash `-n` | `.sh` 无 shebang 时采用 Bash；sh/dash shebang 采用 Dash；不执行脚本，移除 BASH_ENV/ENV 等启动注入，不做 ShellCheck/行为审计；其他 Shell 或带选项 shebang 要求显式流程 |
+| 未被以上规则识别、内容含显式静态 import/export 声明特征的文件 | 整份内容经 stdin 送入 `node --input-type=module --check` | 不依赖目录和扩展名；特征仅用于选择解析器，解析失败仍失败；清除 NODE_OPTIONS，不加载模块、不解析依赖。不把任意文本、无模块声明的陌生 CommonJS 或其他语言当成 JavaScript 放行 |
+| 有明确方言依据的 `.sql` | 固定 SQLFluff 4.4.0，SQLite dialect、raw templater，整份文件解析 | 不执行 SQL，不需要表/schema，不连接数据库，不验证迁移顺序、约束行为或目标 SQLite/D1 版本；不是对任意数据库方言的支持 |
+
+SQL 方言仅来自两类标准声明：最近祖先目录的 `.sqlfluff` 中 `[sqlfluff] dialect=sqlite`；或标准 `wrangler.json` / `wrangler.jsonc` / `wrangler.toml` 的 `d1_databases`（包括 env 子节）中声明的迁移目录。D1 的 `migrations_dir` 相对该配置文件，缺省使用其标准默认 `migrations`；目录可任意命名，必须留在本次 checkout 内。目录范围只提供 SQLite 方言依据，不表示模板会执行或按顺序应用迁移。`.sqlfluff` 明确声明其他方言时拒绝；无依据的 SQL、其他数据库方言、模板 SQL、自定义 Wrangler 配置文件名和 D1 目录外仅由 migrations_pattern 指定的 SQL 需另行明确方言或使用显式流程。不从数据库名称、仓库名、SQL 关键字猜方言。
+
+SQLFluff 不加载 caller 或用户的配置、插件和 Python 模块；`.sqlfluff` 只由控制器读取 dialect，其余 lint/templater/ignore/跳过选项不进入固定解析器。SQL 中的 parser 指令被拒绝，noqa 不能掩盖解析错误；文件大小跳过关闭，仍受控制器 8 MiB 上限约束。SQLFluff 与 pathspec 及依赖以固定版本、PyPI wheel SHA-256、`--require-hashes --only-binary=:all:` 安装到 runner 临时独立虚拟环境，仅存在 SQL/ignore 检查时安装；不写入调用方环境或锁。此工具锁限定 Ubuntu 24.04 的 CPython 3.12 / Linux x86_64，独立于项目所选 Python。解析器覆盖边界不等于 SQLite 引擎的完整兼容认证。
+
+标准依据：[JSONC](https://jsonc.org/)（本实现额外接受常见尾逗号扩展）、[Node dotenv 规范](https://nodejs.org/api/environment_variables.html)、[Node 静态检查](https://nodejs.org/api/cli.html#-c---check)、[静态响应头](https://developers.cloudflare.com/workers/static-assets/headers/)、[assetsignore 格式](https://developers.cloudflare.com/workers/static-assets/binding/)、[Gitignore](https://git-scm.com/docs/gitignore)、[Pages 空标记](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site)、[D1 迁移元数据](https://developers.cloudflare.com/d1/reference/migrations/)、[SQLFluff API](https://docs.sqlfluff.com/en/stable/reference/api/)。
+
 ## Node 脚本选择
 
 每种能力按顺序选首个存在的名称：
@@ -74,7 +97,7 @@ lockfile/package-manager/package-manager-version/audit-command/docs-command/ligh
 
 ## 精确版本、安全与成本
 
-caller 默认使用 `@main`，每次新触发解析本仓库当时的最新 `main` 提交；固定完整 SHA 是需要复现或回滚时的显式选择，不会自动跟随。重跑语义见 [README](../README.md)。auto.yml 由 tools/auto/runtime.py + workflow.yml.in 生成；CI 强制逐字比对。被引用 workflow 本身携带脚本，使用隔离模式 Python 和 runner temp 路径；不会从 caller 的 tools/auto/runtime.py 加载、不会用 github.workflow_ref 猜 callee、不会额外从 main 下载 helper。相对嵌套 uses 由 GitHub 解析为入口选中的同一个提交。标准 actions 仍固定 40 位 SHA，工具下载仍依赖其上游分发与网络，不能把 pin 声称为完整供应链审计。
+caller 默认使用 `@main`，每次新触发解析本仓库当时的最新 `main` 提交；固定完整 SHA 是需要复现或回滚时的显式选择，不会自动跟随。重跑语义见 [README](../README.md)。auto.yml 由 tools/auto/runtime.py、formats.py、requirements-formats.txt 与 workflow.yml.in 生成；CI 强制逐字比对。被引用 workflow 本身携带脚本，使用隔离模式 Python 和 runner temp 路径；不会从 caller 的 tools/auto/runtime.py 或 formats.py 加载、不会用 github.workflow_ref 猜 callee、不会额外从 main 下载 helper。相对嵌套 uses 由 GitHub 解析为入口选中的同一个提交。标准 actions 仍固定 40 位 SHA，工具下载仍依赖其上游分发与网络，不能把 pin 声称为完整供应链审计。
 
 最小 contents:read、persist-credentials:false、无必填 secrets、不 secrets:inherit、不 pull_request_target、不部署/发布。自动模式不上传失败 artifacts，避免将 caller 的日志、数据、隐藏文件或凭据误打包；仅输出检查摘要。不要把凭据写进项目检查日志。全部取消后 GitHub 可能不再派发 Gate，取消状态不能算成功，新的 head 必须有新成功 Gate。
 

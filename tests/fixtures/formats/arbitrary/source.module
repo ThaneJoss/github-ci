@@ -1,0 +1,2 @@
+export const value = 7;
+throw new Error('A syntax check must never execute this module');

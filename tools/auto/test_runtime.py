@@ -225,7 +225,7 @@ class Fixtures(unittest.TestCase):
                 auto.execute(self.detect(), self.root, self.root / 'result.json')
         state = json.loads((self.root / 'result.json').read_text())
         self.assertFalse(state['complete'])
-        self.assertEqual(state['checks'][0]['result'], 'failure')
+        self.assertEqual(state['checks'][-1]['result'], 'failure')
 
     def test_node_skips_and_zero_tests_fail(self):
         self.package(scripts={'test': 'node --test'})
@@ -251,12 +251,16 @@ class Fixtures(unittest.TestCase):
         script = next(s['run'] for s in workflow['jobs']['quality']['steps'] if s.get('id') == 'discover')
         embedded = script.split("<<'PY_RUNTIME'\n", 1)[1].split('\nPY_RUNTIME', 1)[0]
         self.assertEqual(embedded, (ROOT / 'tools/auto/runtime.py').read_text().rstrip())
+        for marker, filename in [('PY_FORMATS', 'formats.py'), ('format_requirements', 'requirements-formats.txt')]:
+            embedded = script.split("<<'" + marker + "'\n", 1)[1].split('\n' + marker, 1)[0]
+            self.assertEqual(embedded, (ROOT / 'tools/auto' / filename).read_text().rstrip())
         self.assertNotIn('raw.githubusercontent.com', script)
         self.assertNotIn('python3 tools/', script)
 
     def test_controller_cannot_import_caller_json(self):
         self.put('README.md', 'fixture\n')
         self.put('json.py', 'raise Exception("caller shadow imported")\n')
+        self.put('formats.py', 'raise Exception("caller format helper imported")\n')
         env = {**os.environ, 'CI_AUTO_DIR': str(self.root / 'temp'), 'GITHUB_WORKSPACE': str(self.root),
                'GITHUB_OUTPUT': str(self.root / 'output')}
         result = subprocess.run(['python3', '-I', str(ROOT / 'tools/auto/runtime.py'), 'detect'], cwd=self.root, env=env, capture_output=True, text=True)

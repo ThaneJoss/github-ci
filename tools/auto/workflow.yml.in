@@ -76,6 +76,12 @@ jobs:
           cat > "$CI_AUTO_DIR/runtime.py" <<'PY_RUNTIME'
 @@RUNTIME@@
           PY_RUNTIME
+          cat > "$CI_AUTO_DIR/formats.py" <<'PY_FORMATS'
+@@FORMATS@@
+          PY_FORMATS
+          cat > "$CI_AUTO_DIR/requirements-formats.txt" <<'format_requirements'
+@@FORMAT_REQUIREMENTS@@
+          format_requirements
           /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" detect
       - name: Set up declared Node
         id: node
