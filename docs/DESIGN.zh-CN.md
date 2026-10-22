@@ -119,7 +119,7 @@ Gate使用`if: always()`，显式读取每个直接依赖的`needs.<id>.result`�
 
 使用`pull_request`而不是`pull_request_target`来运行PR代码。fork和Dependabot PR不应获得机密；GitHub可能要求批准首次贡献者运行，属于平台策略，不应通过换事件绕过。私有registry需要凭据时另行设计隔离策略，不能为了绿灯把令牌传给fork代码。日志、失败artifact只收约定报告目录，禁止上传整个workspace、隐藏文件、env、凭据、数据集或私有源代码包。
 
-第三方和官方Actions均固定40位commit，附版本注释与来源；可复用入口也固定模板commit。pin直接依赖不等于锁住传递依赖和Action运行时下载的工具。GitHub当前还提供[workflow dependency lockfiles](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)，可以单独评估引入；本候选未生成或测试lockfile。
+第三方和官方Actions均固定40位commit，附版本注释与来源；自有可复用入口默认使用 `@main`，使新触发跟随已合入的模板更新，两者采用不同的版本策略。内部相对 workflow 引用与内嵌 runtime 使用入口解析到的同一提交，不额外追踪其他版本。pin直接依赖不等于锁住传递依赖和Action运行时下载的工具。GitHub当前还提供[workflow dependency lockfiles](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)，可以单独评估引入；本候选未生成或测试lockfile。
 
 预览部署、生产发布使用另一个工作流及明确授权的环境权限；本包不含部署。四级证据必须分开：代码质量通过 → 构建/上传通过 → 实际preview URL返回预期状态 → 对该URL进行功能/浏览器验收。无Preview URL或检测步骤skip不能升级为线上通过。代码审核bot是否安装、是否允许draft、是否完成review由App/实际review证据确定，工作流绿灯不能代替bot批准。
 
@@ -129,10 +129,10 @@ Gate使用`if: always()`，显式读取每个直接依赖的`needs.<id>.result`�
 
 私有模板给其它仓库开放后，该caller的外部协作者可能通过运行日志间接看到内容，不能当作隔离秘密的容器。此任务选定公开`ThaneJoss/github-ci`，因此公开包仅含泛用逻辑；调研报告与私有项目证据必须留在独立内部附件，禁止整体上传工作区。
 
-当前示例固定首次公开commit `835d0365f1a05d53f1a3c49fa38d907ee3828093`。尚未创建版本tag；未来可发布`v1.0.0`便于人读，生产caller仍固定完整SHA；升级由普通PR更新SHA和版本注释，审阅变化、在试点跑真实GitHub检查再扩散。可选择可移动`v1`便利升级，但需接受上游更新立即影响所有caller的风险，不作为默认。回滚是caller改回已验证SHA，不重写历史tag。
+当前 README 和全部 caller 示例默认使用 `ThaneJoss/github-ci/.github/workflows/ci.yml@main`。模板通过 PR 审查、验证并合入 `main` 后，调用仓库下一次新触发自动使用当时分支的最新提交；模板更新不会主动触发 caller，也不改变已运行的版本。调用方接受模板后续变更；确需复现或临时回滚时可改为已验证的完整 SHA，并明确此时不再自动跟随。不要复制历史验证记录中的 SHA 作为默认接入方式，也不要创建会优先于分支解析的同名 `main` tag。已有 run 的失败/单个 job 重跑沿用首次模板提交，全部 jobs 重跑重新解析引用；完整说明与官方链接见 [README](../README.md)。
 
 复用工作流中的checkout检出caller仓库，而不是模板仓库；这里核心模块脚本内嵌，辅助脚本须显式复制给caller，不能假设模板的scripts已出现。caller `uses`位置不能用表达式动态拼仓库/版本。inputs类型必须一致，secrets显式传递且不自动跨嵌套继承。完整官方核对在内部附件`reports/github-semantics.md`，可公开参考[重用工作流](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)、[工作流语法](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)、[避免required检查挂起](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/troubleshooting-required-status-checks)。
 
 ## 10. 接入与验收边界
 
-先保留项目自己的检查脚本和测试，将caller指向模板SHA，再在试点比较覆盖和耗时。不将项目迁移与大规模依赖升级混在一处。模板语法通过actionlint不代表依赖安装、浏览器兼容、缓存命中、fork运行权限、required check呈现或GitHub嵌套调度已经验收。本模板的维护CI不会执行任何调查项目源码、GPU训练或大数据下载；真实执行范围见验证记录。
+先保留项目自己的检查脚本和测试，将caller指向模板 `@main`，再在试点比较覆盖和耗时。不将项目迁移与大规模依赖升级混在一处。模板语法通过actionlint不代表依赖安装、浏览器兼容、缓存命中、fork运行权限、required check呈现或GitHub嵌套调度已经验收。本模板的维护CI不会执行任何调查项目源码、GPU训练或大数据下载；真实执行范围见验证记录。

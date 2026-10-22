@@ -1,5 +1,5 @@
 # Complete caller: no inputs, environment variables or secrets to configure.
-# Review and update the immutable template SHA when upgrading.
+# New runs follow github-ci main; third-party Actions remain pinned to full SHAs.
 name: CI
 'on':
   push: {}
@@ -10,4 +10,4 @@ permissions:
   contents: read
 jobs:
   ci:
-    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@a02b1a7b15ddb68b5fc01b93995154ee2147d0a0
+    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@main

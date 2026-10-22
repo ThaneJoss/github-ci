@@ -1,4 +1,4 @@
-# INTEGRATION EXAMPLE: pinned to the initial published template commit; review before upgrading.
+# INTEGRATION EXAMPLE: new runs follow github-ci main; third-party Actions remain SHA-pinned.
 # Copy as .github/workflows/ci.yml and adjust branch, runtime, lockfile and repository scripts.
 # Configure only the unique required check name Gate after a successful real GitHub run.
 # No event-level path filters; no secrets inheritance; do not conditionally skip jobs.ci.
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   ci:
     name: CI
-    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@835d0365f1a05d53f1a3c49fa38d907ee3828093
+    uses: ThaneJoss/github-ci/.github/workflows/ci.yml@main
     with:
       profile: node
       node-version: '22'

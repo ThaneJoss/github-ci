@@ -74,7 +74,7 @@ lockfile/package-manager/package-manager-version/audit-command/docs-command/ligh
 
 ## 精确版本、安全与成本
 
-auto.yml 由 tools/auto/runtime.py + workflow.yml.in 生成；CI 强制逐字比对。被引用 workflow 本身携带脚本，使用隔离模式 Python 和 runner temp 路径；不会从 caller 的 tools/auto/runtime.py 加载、不会用 github.workflow_ref 猜 callee、不会从 main 下载。相对嵌套 uses 由 GitHub 解析为同一个提交。标准 actions 固定 40 位 SHA，工具下载仍依赖其上游分发与网络，不能把 pin 声称为完整供应链审计。
+caller 默认使用 `@main`，每次新触发解析本仓库当时的最新 `main` 提交；固定完整 SHA 是需要复现或回滚时的显式选择，不会自动跟随。重跑语义见 [README](../README.md)。auto.yml 由 tools/auto/runtime.py + workflow.yml.in 生成；CI 强制逐字比对。被引用 workflow 本身携带脚本，使用隔离模式 Python 和 runner temp 路径；不会从 caller 的 tools/auto/runtime.py 加载、不会用 github.workflow_ref 猜 callee、不会额外从 main 下载 helper。相对嵌套 uses 由 GitHub 解析为入口选中的同一个提交。标准 actions 仍固定 40 位 SHA，工具下载仍依赖其上游分发与网络，不能把 pin 声称为完整供应链审计。
 
 最小 contents:read、persist-credentials:false、无必填 secrets、不 secrets:inherit、不 pull_request_target、不部署/发布。自动模式不上传失败 artifacts，避免将 caller 的日志、数据、隐藏文件或凭据误打包；仅输出检查摘要。不要把凭据写进项目检查日志。全部取消后 GitHub 可能不再派发 Gate，取消状态不能算成功，新的 head 必须有新成功 Gate。
 
