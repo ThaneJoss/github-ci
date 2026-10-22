@@ -1,0 +1,16 @@
+{
+  "name": "orbit-472",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "lint": "node --check index.cjs",
+    "test": "node --test --test-reporter=tap test/*.test.cjs",
+    "pretest": "node -e \"throw new Error('implicit pretest must not run')\""
+  },
+  "dependencies": {
+    "picocolors": "1.1.1"
+  }
+}

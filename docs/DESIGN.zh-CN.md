@@ -1,5 +1,7 @@
 # 通用 CI 设计（可公开部分）
 
+> 自动入口已新增：默认无需 inputs，Gate/并发取消由入口内置，uv 使用原生锁。以下早期显式模块设计的成本、安全、覆盖要求继续适用；接入方式、自动版本优先级和 uv 支持以[自动识别契约](AUTOMATIC.zh-CN.md)为准。旧显式模块仍可单独调用。
+
 核对日期：2026-10-13 UTC。目标仓库：[`ThaneJoss/github-ci`](https://github.com/ThaneJoss/github-ci)。本仓库包含可复用模块与调用示例，实际发布和执行范围见[验证记录](VALIDATION.zh-CN.md)。它统一质量契约、门禁和安全边界；项目仍拥有真实检查脚本。不能用统一脚本名证明存在相应测试覆盖。
 
 本流程禁止按repository、owner/repo名单或项目特殊case分流；调用方仅提供技术栈/能力inputs与真实检查命令。内部项目对照不参与运行时。具体约束见[可移植性契约](PORTABILITY.zh-CN.md)，外部一手实践见[大型项目研究](INDUSTRY-PRACTICES.zh-CN.md)。
@@ -60,7 +62,7 @@ flowchart LR
 
 - npm使用`npm ci`；pnpm使用`pnpm install --frozen-lockfile`且packageManager/工具版本固定。锁文件不匹配直接失败。缓存仅包管理器下载/store，不能把旧node_modules当作本次锁安装证明。
 - 模板关闭setup-node自动缓存，显式缓存下载store，键包含调用项目真实锁文件哈希；Python缓存指向真实CI锁。有效cache键必须区分OS/架构/运行时/包管理器及lock哈希。多根项目不得错误共用根锁作为Worker缓存键；按工作目录传入。
-- 本次Python模块实现的是hash固定pip锁安装，不直接支持uv.lock。保留uv的项目可在后续专用模块中实现：uv必须`uv sync --locked`并明确CPU CI组及`--no-default-groups`等边界；或使用完整固定、含哈希的独立`requirements-ci.lock`与`pip --require-hashes`。主项目CUDA锁不等于可用于CPU CI，先建立独立CPU依赖契约再迁移；不在PR里运行`uv lock`或浮动`uvx latest`。
+- 原显式Python模块仍实现hash固定pip锁安装；新增auto入口已支持原生uv.lock，详见自动识别契约。uv必须遵循的原则是：uv必须`uv sync --locked`并明确CPU CI组及`--no-default-groups`等边界；或使用完整固定、含哈希的独立`requirements-ci.lock`与`pip --require-hashes`。主项目CUDA锁不等于可用于CPU CI，先建立独立CPU依赖契约再迁移；不在PR里运行`uv lock`或浮动`uvx latest`。
 - Vue必须显式使用`vue-tsc --noEmit`或等价Vue language-tools检查SFC模板、props、emits；单独`tsc`/`tsgo`不能算完整Vue类型门禁。组件/浏览器运行时测试补充类型检查，不能替代模板静态类型验证。
 - Web构建后检查关键路由、404、资源、headers/CSP约束及体积预算（按项目需求），浏览器只测最关键正常/失败/键盘路径。axe自动化不能证明全部无障碍合规。
 - Worker使用本地仿真/单元测试请求和bindings，构建采用`wrangler deploy --dry-run`等无上传方式；测试脚本不得暗中连接生产或修改DNS。

@@ -34,7 +34,8 @@ def main():
                         | set((root / '.github/workflows').glob('*.yaml'))
                         | set((root / 'examples').glob('*.yml'))
                         | set((root / 'examples').glob('*.yaml'))
-                        | set((root / 'examples/helpers').glob('*.py')))
+                        | set((root / 'examples/helpers').glob('*.py'))
+                        | set((root / 'tools/auto').glob('runtime.py')))
     if not candidates:
         raise SystemExit('No CI implementation found; empty checks do not count.')
     errors = []
