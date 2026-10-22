@@ -8,7 +8,7 @@
 
 实际发现并修复了两类集成问题：setup-python 需要把 PEP 440 范围转换成 semver；7zz 所需包为 7zip-standalone，不能假定 7zip 包或 runner 自带满足测试。失败 run 的自动分支及汇总 Gate 都保持失败，未用忽略错误或跳过测试处理。
 
-本版示例固定的运行时代码提交为 `1e1853de35edcace1a1a87ad2458aec47bd07861`，增加原生 uv.lock 优先于根 requirements*.txt 导出文件的支持；最终 head 与全部检查的验收记录放在 [draft PR #1](https://github.com/ThaneJoss/github-ci/pull/1)，避免在 commit 中循环引用自身 SHA。PR 未合并，没有改业务仓库或分支保护。
+本版示例固定的运行时代码提交为 `1e1853de35edcace1a1a87ad2458aec47bd07861`，增加原生 uv.lock 优先于根 requirements*.txt 导出文件的支持；最终 head 与全部检查的验收记录见 [PR #1](https://github.com/ThaneJoss/github-ci/pull/1) 的提交及 Checks，避免在 commit 中循环引用自身 SHA。PR 未合并，没有改业务仓库或分支保护。
 
 ## 回归覆盖
 
@@ -20,6 +20,8 @@
 - Python精确 patch下限、PEP440范围转换、uv与pip导出共存、stdlib/pytest选择；
 - 空测试、跳过、测试失败、审计失败及锁变化不能生成成功证明；
 - 入口所有 inputs 无必填项；嵌入代码与源码一致。
+
+PR 审查修复的回归由 unittest discovery 统一收集全部 tools/auto/test_*.py：逐成员原生测试回退、npm/pnpm workspace 元数据与实际管理器绑定、拒绝未校验的 packageManager 完整性哈希、带选项的嵌套脚本解析、包装脚本中的 node:test 空测试/skip 检查，以及混合项目的未知源码拒绝。远端 workspace fixture 同时包含有 test script 和无 test script 的成员。
 
 Gate真值表覆盖 success/failure/cancelled/skipped/缺失输出，以及未选分支意外运行。它在 GitHub 上执行真实 Gate 脚本；这不等于对 GitHub 强制取消整个 run 的调度行为已做实测。
 

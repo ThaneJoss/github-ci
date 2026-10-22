@@ -12,10 +12,10 @@ quality-passed=true 表示本次计划中的检查和原生审计全部成功，
 | --- | --- | --- |
 | 根 package.json + package-lock.json/npm-shrinkwrap.json | npm ci，随后 npm audit --audit-level=high | 两份 Node 锁同时存在直接失败 |
 | 根 package.json + pnpm-lock.yaml | pnpm frozen install 和 high/critical 审计 | packageManager 与锁冲突失败 |
-| packageManager | npm/pnpm 精确 x.y.z 优先（允许标准 SHA 完整性后缀） | yarn/bun/浮动工具版本不支持 |
+| packageManager | npm/pnpm 精确 x.y.z 优先 | 带 +sha… 完整性后缀的声明要求显式流程校验，auto 拒绝而不丢弃哈希；yarn/bun/浮动工具版本不支持 |
 | 未声明 packageManager 版本 | npm 使用所选 Node 内置 npm；pnpm lock 9.0 固定回退 10.18.3，6.0 回退 8.15.9 | lock 格式不能证明原精确工具版本；未知格式报错。摘要显示回退 |
 | Node 版本 | 可选 input → .nvmrc → .node-version → volta.node → engines.node → **24** | 稳定数字/semver 范围；lts/node 别名不支持。所选实际版本必须满足所有读到的声明，冲突失败 |
-| npm workspaces / pnpm-workspace.yaml packages | 只从已提交 manifests 选成员，在根安装一次；执行根和每个成员的约定 scripts | 没有 root manifest、成员不在 workspace、成员独立锁或包管理器冲突均报错 |
+| npm workspaces / pnpm-workspace.yaml packages | 按实际包管理器读取成员声明：npm 使用 package.json 的 workspaces，pnpm 使用 pnpm-workspace.yaml；在根安装一次，执行根和每个成员的约定 scripts | 不能用另一管理器的 workspace 声明代替；没有 root manifest、成员不在 workspace、成员独立锁或包管理器冲突均报错 |
 | 无依赖 JS/plugin | 检查已提交 JS 语法，运行已声明脚本或标准 node:test 文件；不安装无意义依赖 | 任一 dependencies/dev/optional/peerDependencies 存在即要求锁 |
 | Python 版本 | 可选 input → .python-version → project.requires-python → **3.13** | 保留 patch 下限与上限，例如 >=3.14.5,<3.15；不退回 3.11。将稳定 PEP 440 比较、逗号交集、==/!= 通配和 ~= 转成 setup-python 所需 semver；实际解释器还校验 requires-python |
 | pyproject.toml + uv.lock | 固定 uv 0.12.19，uv export --locked 预检、uv sync --locked、uv audit --locked | 不把 uv.lock 当 pip requirements，不改写锁、不自动 uv lock |
@@ -42,11 +42,11 @@ pnpm workspace YAML 支持常见字面 block 列表或带引号的 inline 列表
 | test | test:ci → test → test:unit |
 | build | build:ci → build |
 
-不把 check/start/dev/prepare 任意脚本视为测试。没有 test script 时，只对 *.test.js/*.test.mjs/*.test.cjs（同样支持 .spec）中明确导入 node:test 的文件使用 Node 内置 runner；其余情况显示 NOT RUN。Node 内置 runner 必须报告非零测试数，不允许已识别的 skip/todo。其他测试 runner 仅证明命令成功；如需严格计数/skip 策略，用项目自己的 CI script 明确保证。
+不把 check/start/dev/prepare 任意脚本视为测试。逐个检查根包及 workspace 成员：没有 test script 的包，只对其所属 *.test.js/*.test.mjs/*.test.cjs（同样支持 .spec）中明确导入 node:test 的文件使用 Node 内置 runner；文件归属最近的包，其他成员的 test script 不会关闭此回退。其余情况显示 NOT RUN。Node 内置 runner（包括由嵌套脚本调用）必须报告非零测试数，不允许已识别的 skip/todo。其他测试 runner 仅证明命令成功；如需严格计数/skip 策略，用项目自己的 CI script 明确保证。
 
 所有 JS 语法检查只针对跟踪文件；TypeScript/JSX/Vue 至少需要声明 lint/typecheck/build，不能以 node --check 冒充。Vue 项目应在标准 typecheck script 使用 vue-tsc；模板不能把缺失的 Vue 检查说成已有。
 
-安装禁用 lifecycle scripts，运行检查禁用自动 pre/post hooks，避免因安装/测试顺带发布。依赖需要 native postinstall 时使用经过审阅的显式模式或项目 CI command。auto 拒绝选中脚本中直接的 deploy/publish/release/train/download/curl/wget、占位测试、--passWithNoTests、--if-present、|| true；允许 wrangler deploy --dry-run。会检查字面 npm/pnpm run 引用的脚本。**这只是直接误配置拦截，无法静态证明任意脚本内部安全**；项目自己的 CI scripts 仍应只做本地、轻量检查，不能连接生产或下载大数据。
+安装禁用 lifecycle scripts，运行检查禁用自动 pre/post hooks，避免因安装/测试顺带发布。依赖需要 native postinstall 时使用经过审阅的显式模式或项目 CI command。auto 拒绝选中脚本中直接的 deploy/publish/release/train/download/curl/wget、占位测试、--passWithNoTests、--if-present、|| true；允许 wrangler deploy --dry-run。会递归检查字面 npm/pnpm run/run-script 引用的脚本，支持 run 前后的 --silent 等日志选项，以及 npm --loglevel / pnpm --reporter；--workspace/--prefix/--filter 等改变目标上下文的选项要求显式模式，不能按当前包误判。**这只是直接误配置拦截，无法静态证明任意脚本内部安全**；项目自己的 CI scripts 仍应只做本地、轻量检查，不能连接生产或下载大数据。
 
 ## uv、CPU和系统工具
 
@@ -58,7 +58,7 @@ uv 原生锁保留不动。sync 使用 --no-build --no-install-project：仅安�
 
 ## 明确不支持的自动结构
 
-独立多根/多锁 monorepo、uv workspace、动态 Python metadata、非 registry Python依赖、纯 pip/Poetry/Pipenv/Yarn/Bun/其他语言构建系统、过大的数据/依赖、符号链接/子模块、超出声明的 Node workspace成员，都会报错或要求显式流程，不退化成 docs 绿灯。
+独立多根/多锁 monorepo、uv workspace、动态 Python metadata、非 registry Python依赖、纯 pip/Poetry/Pipenv/Yarn/Bun/其他语言构建系统、过大的数据/依赖、符号链接/子模块、超出声明的 Node workspace成员，都会报错或要求显式流程，不退化成 docs 绿灯。未知源码的检查也适用于已经发现 Node/Python 的混合项目；例如同时存在 package.json 与 infra/main.tf 时，不能仅凭 JavaScript 检查通过就放行。常见文档、图片、字体及明确配置文件仍可共存；HTML/CSS 等前端源码需要 Node 项目声明 lint/typecheck/build。
 
 只枚举 git ls-files，不递归磁盘查找；最多 20000 跟踪路径，单个读取文件最多 8 MiB。忽略 node_modules/.venv/vendor/dist/build/coverage 等安装及生成目录。遇到超过范围的结构，可以为独立根显式传 working-directory；各根必须有自己的真实锁。不要为避开错误删除已有必要检查。
 

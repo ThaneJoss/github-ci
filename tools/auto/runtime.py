@@ -177,6 +177,70 @@ def safe_script(command):
             'Selected check contains a placeholder or failure/empty-test suppression')
 
 
+def nested_scripts(command):
+    """Follow literal same-package run calls; ambiguous CLI options need explicit mode."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|()<>\n')
+    lexer.whitespace_split = True
+    lexer.whitespace = ' \t\r'
+    lexer.commenters = '#'
+    try:
+        tokens = list(lexer)
+    except ValueError as error:
+        raise Invalid(f'Cannot parse selected check script: {error}') from error
+    boundaries = set(';&|()<>\n')
+
+    def option(args, index, manager):
+        value = args[index]
+        switches = {'--silent', '-s'}
+        if manager == 'npm':
+            switches |= {'--quiet', '-q', '--verbose', '-d', '-dd', '-ddd', '--dd', '--ddd'}
+        if value in switches:
+            return index + 1
+        name, equals, setting = value.partition('=')
+        supported = {'--loglevel'} if manager == 'npm' else {'--reporter'}
+        if name in supported:
+            if not equals:
+                require(index + 1 < len(args) and not args[index + 1].startswith('-'),
+                        f'Missing value for nested {manager} option: {name}')
+                setting = args[index + 1]
+            require(setting, f'Missing value for nested {manager} option: {name}')
+            return index + (1 if equals else 2)
+        raise Invalid(f'Unsupported nested {manager} option: {value}; use a same-package run call or explicit mode')
+
+    for start, manager in enumerate(tokens):
+        if manager not in {'npm', 'pnpm'}:
+            continue
+        end = start + 1
+        while end < len(tokens) and not (tokens[end] and set(tokens[end]) <= boundaries):
+            end += 1
+        args = tokens[start + 1:end]
+        if not any(value in {'run', 'run-script'} for value in args):
+            continue
+        index = 0
+        flags = True
+        positional = []
+        while index < len(args):
+            value = args[index]
+            if flags and value == '--':
+                flags = False
+                index += 1
+                continue
+            if flags and value.startswith('-'):
+                index = option(args, index, manager)
+                continue
+            positional.append(value)
+            index += 1
+            if len(positional) == 1 and value not in {'run', 'run-script'}:
+                break
+            if len(positional) == 2 and manager == 'pnpm':
+                # pnpm passes everything after the script name to the script.
+                break
+        if positional and positional[0] in {'run', 'run-script'}:
+            require(len(positional) >= 2 and re.fullmatch(r'[\w:.-]+', positional[1]),
+                    f'Nested {manager} run needs a literal script name')
+            yield positional[1]
+
+
 def select_scripts(package, directory, manager):
     scripts = package.get('scripts', {})
     require(isinstance(scripts, dict), 'package.json scripts must be an object')
@@ -190,12 +254,13 @@ def select_scripts(package, directory, manager):
                     return
                 seen.add(key)
                 safe_script(scripts[key])
-                for child in re.findall(r'\b(?:npm|pnpm)\s+run\s+([\w:-]+)', scripts[key]):
+                for child in nested_scripts(scripts[key]):
                     require(child in scripts, f'Unknown nested script: {child}')
                     visit(child)
             visit(name)
             checks.append({'kind': kind, 'cwd': directory, 'argv': [manager, 'run', name],
-                           'label': f'{directory}: {name}', 'node_test': bool(re.search(r'\bnode\s+--test\b', scripts[name]))})
+                           'label': f'{directory}: {name}',
+                           'node_test': any(re.search(r'\bnode\s+--test\b', scripts[key]) for key in seen)})
     return checks
 
 
@@ -238,17 +303,7 @@ def discover(root, overrides=None):
     py_files = [p for p in files if p.endswith('.py')]
     if package is not None or js_files:
         package = package or {}
-        workspace_patterns = package.get('workspaces', [])
-        if isinstance(workspace_patterns, dict):
-            workspace_patterns = workspace_patterns.get('packages', [])
-        if 'pnpm-workspace.yaml' in names:
-            pnpm = pnpm_patterns(root / 'pnpm-workspace.yaml')
-            require(not workspace_patterns or workspace_patterns == pnpm, 'Conflicting npm/pnpm workspace declarations')
-            workspace_patterns = pnpm
-        require(isinstance(workspace_patterns, list), 'workspaces must be a list of package paths')
         members = [str(Path(p).parent) for p in node_manifests if p != 'package.json']
-        require(all(patterns_match(p, workspace_patterns) for p in members),
-                'Nested package.json outside declared workspace; choose a root or declare workspace members')
         root_locks = [p for p in LOCKS if p in names]
         require(len(root_locks) <= 1, 'Ambiguous Node lockfiles; keep one authoritative root lock')
         require(not [p for p in lock_paths if Path(p).name in LOCKS and p not in root_locks],
@@ -260,7 +315,10 @@ def discover(root, overrides=None):
         manager = LOCKS[root_locks[0]] if root_locks else 'npm'
         pm_version = ''
         if declaration:
-            match = re.fullmatch(r'(npm|pnpm)@(\d+\.\d+\.\d+)(?:\+sha(?:224|256|384|512)\.[a-fA-F0-9]+)?', declaration)
+            require(isinstance(declaration, str), 'packageManager must be a string')
+            require('+sha' not in declaration,
+                    'packageManager integrity hashes are not verified by automatic mode; use an explicit workflow that verifies the declared hash')
+            match = re.fullmatch(r'(npm|pnpm)@(\d+\.\d+\.\d+)', declaration)
             require(match, 'packageManager must pin npm or pnpm to an exact x.y.z version')
             require(not root_locks or match[1] == manager, 'packageManager conflicts with lockfile')
             manager, pm_version = match[1], match[2]
@@ -269,6 +327,23 @@ def discover(root, overrides=None):
             require(fmt and fmt[1] in {'9.0', '6.0'}, 'Unknown pnpm lock format; declare packageManager')
             pm_version = {'9.0': '10.18.3', '6.0': '8.15.9'}[fmt[1]]
             plan['notes'].append(f'No packageManager version: compatible fixed pnpm fallback {pm_version}; declare packageManager for exact intent')
+        npm_workspaces = package.get('workspaces', [])
+        if isinstance(npm_workspaces, dict):
+            npm_workspaces = npm_workspaces.get('packages', [])
+        require(isinstance(npm_workspaces, list), 'workspaces must be a list of package paths')
+        pnpm_workspaces = pnpm_patterns(root / 'pnpm-workspace.yaml') if 'pnpm-workspace.yaml' in names else None
+        require(not npm_workspaces or pnpm_workspaces is None or npm_workspaces == pnpm_workspaces,
+                'Conflicting npm/pnpm workspace declarations')
+        if manager == 'pnpm':
+            require(not npm_workspaces or pnpm_workspaces is not None,
+                    'pnpm workspaces require pnpm-workspace.yaml; package.json workspaces alone are not installed by pnpm')
+            workspace_patterns = pnpm_workspaces or []
+        else:
+            require(pnpm_workspaces is None or npm_workspaces,
+                    'npm workspaces require package.json workspaces; pnpm-workspace.yaml alone is not used by npm')
+            workspace_patterns = npm_workspaces
+        require(all(patterns_match(p, workspace_patterns) for p in members),
+                'Nested package.json outside declared workspace for the selected package manager; choose a root or declare workspace members')
         declarations = []
         for p in ['.nvmrc', '.node-version']:
             if p in names:
@@ -289,14 +364,21 @@ def discover(root, overrides=None):
             plan['checks'].extend(select_scripts(pkg, directory, manager))
         if not dependencies and not root_locks:
             plan['notes'].append('Node has no declared dependencies/lock: no dependency installation or vulnerability claim')
-        if not any(c['kind'] == 'test' for c in plan['checks']):
-            native_tests = [p for p in js_files if re.search(r'(?:\.test|\.spec)\.(?:c|m)?js$', p)
+        # Assign each file to its nearest package so one member's script cannot
+        # suppress another member's native tests or make the root run them twice.
+        def owner(path):
+            return next((p for p in sorted(members, key=len, reverse=True) if path.startswith(p + '/')), '.')
+        for directory, _ in packages:
+            if any(c['kind'] == 'test' and c.get('cwd') == directory for c in plan['checks']):
+                continue
+            native_tests = [str(Path(p).relative_to(directory)) for p in js_files if owner(p) == directory
+                            and re.search(r'(?:\.test|\.spec)\.(?:c|m)?js$', p)
                             and re.search(r'(?:require\([\"\']node:test[\"\']\)|from\s+[\"\']node:test[\"\'])', read(root / p))]
             if native_tests:
-                plan['checks'].append({'kind': 'test', 'cwd': '.', 'argv': ['node', '--test', '--test-reporter=tap', *native_tests],
-                                       'label': 'Native node:test files', 'node_test': True})
+                plan['checks'].append({'kind': 'test', 'cwd': directory, 'argv': ['node', '--test', '--test-reporter=tap', *native_tests],
+                                       'label': f'{directory}: Native node:test files', 'node_test': True})
             else:
-                plan['notes'].append('Node tests NOT RUN: no conventional script or native node:test files')
+                plan['notes'].append(f'Node tests NOT RUN ({directory}): no conventional script or native node:test files')
         if js_files:
             plan['checks'].append({'kind': 'syntax', 'mode': 'javascript', 'files': js_files, 'label': 'JavaScript syntax (not tests)'})
         require(not any(Path(p).suffix in {'.ts', '.tsx', '.jsx', '.vue'} for p in files) or any(c['kind'] in {'lint', 'typecheck', 'build'} for c in plan['checks']),
@@ -359,13 +441,23 @@ def discover(root, overrides=None):
     require(not lock_paths or plan['node'] or plan['python'], 'Lock without a corresponding project manifest')
     for path in lock_paths:
         plan['locks'][path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
+    # A supported runtime must not hide an unchecked secondary language/stack.
+    document_extensions = {'.md', '.markdown', '.json', '.yaml', '.yml', '.toml', '.txt', '.rst', '.adoc',
+                           '.csv', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.pdf',
+                           '.ttf', '.otf', '.woff', '.woff2'}
+    metadata_names = {'.gitignore', '.gitattributes', '.editorconfig', 'LICENSE', 'LICENCE', 'COPYING', 'NOTICE'}
+    supported_sources = set(js_files + py_files + lock_paths)
+    if plan['node']:
+        metadata_names.update({'.nvmrc', '.node-version', '.npmrc'})
+        if any(c['kind'] in {'lint', 'typecheck', 'build'}
+               and c.get('argv', [None])[0] == plan['node']['manager'] for c in plan['checks']):
+            supported_sources.update(p for p in files if Path(p).suffix in {'.ts', '.tsx', '.jsx', '.vue', '.html', '.css', '.scss', '.sass', '.less'})
+    if plan['python']:
+        metadata_names.update({'.python-version', 'mypy.ini', '.mypy.ini', 'pytest.ini', '.coveragerc'})
+    code = [p for p in files if p not in supported_sources
+            and Path(p).suffix.lower() not in document_extensions and Path(p).name not in metadata_names]
+    require(not code, f'Unsupported source without an automatic check: {code[:5]}; use an explicit workflow')
     if not plan['node'] and not plan['python']:
-        document_extensions = {'.md', '.markdown', '.json', '.yaml', '.yml', '.toml', '.txt', '.rst', '.adoc',
-                               '.csv', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.pdf',
-                               '.ttf', '.otf', '.woff', '.woff2'}
-        metadata_names = {'.gitignore', '.gitattributes', '.editorconfig', 'LICENSE', 'LICENCE', 'COPYING', 'NOTICE'}
-        code = [p for p in files if Path(p).suffix.lower() not in document_extensions and Path(p).name not in metadata_names]
-        require(not code, f'Unsupported source without standard manifest: {code[:5]}')
         docs = [p for p in files if Path(p).suffix.lower() in {'.md', '.markdown', '.json'}]
         require(docs, 'No supported code or Markdown/JSON documents')
         plan['checks'].append({'kind': 'docs', 'files': docs, 'label': 'Offline Markdown/JSON validation (not tests)'})

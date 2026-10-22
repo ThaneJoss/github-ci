@@ -42,7 +42,7 @@ jobs:
       - name: Verify generated exact-version runtime and automatic fixtures
         run: |
           python tools/auto/render.py --check
-          python tools/auto/test_runtime.py
+          python -m unittest discover -s tools/auto -p 'test_*.py'
       - name: Test audit and content helpers
         run: python tools/test_helpers.py
       - name: Check identity-free capability contract
