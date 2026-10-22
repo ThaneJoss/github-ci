@@ -48,6 +48,8 @@ pnpm workspace YAML 支持常见字面 block 列表或带引号的 inline 列表
 
 安装禁用 lifecycle scripts，运行检查禁用自动 pre/post hooks，避免因安装/测试顺带发布。依赖需要 native postinstall 时使用经过审阅的显式模式或项目 CI command。auto 拒绝选中脚本中直接的 deploy/publish/release/train/download/curl/wget、占位测试、--passWithNoTests、--if-present、|| true；允许 wrangler deploy --dry-run。会递归检查字面 npm/pnpm run/run-script 引用的脚本，支持 run 前后的 --silent 等日志选项，以及 npm --loglevel / pnpm --reporter；--workspace/--prefix/--filter 等改变目标上下文的选项要求显式模式，不能按当前包误判。**这只是直接误配置拦截，无法静态证明任意脚本内部安全**；项目自己的 CI scripts 仍应只做本地、轻量检查，不能连接生产或下载大数据。
 
+pnpm 12 在禁用安装脚本时保留无 shebang 的 shell 入口；控制器以固定 Bash `exec "$@"` 和独立参数启动 pnpm，覆盖版本查询、冻结安装、检查与审计，不启用安装脚本、不拼接命令。旧 npm/pnpm 配置与新版 `pnpm_config_*` 同时保留；新版 `pmOnFail=error` 禁止自动切换管理器，版本不符仍失败（见 [pnpm 配置迁移](https://pnpm.io/migration)）。旧 pnpm 的 false 配置使用可在嵌套 scripts 中继承的大写变量。pnpm 12 的原生锁可能含独立的包管理器数据文档，调用项目应提交其完整原生锁；模板不补写或接受安装期间的锁变化。Yarn 仍不支持。
+
 ## uv、CPU和系统工具
 
 uv 原生锁保留不动。sync 使用 --no-build --no-install-project：仅安装锁中可用 wheel，不临时构建第三方 sdist，不构建/安装本地项目。wheel 内容、隔离安装、src-layout 可导入性与 CLI 行为需要项目现有明确测试或可选命令，摘要会显示打包验证未自动执行。

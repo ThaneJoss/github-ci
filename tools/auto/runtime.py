@@ -477,9 +477,16 @@ def discover(root, overrides=None):
     return plan
 
 
+def package_manager_argv(argv):
+    # pnpm 12 ships a shebang-less shell launcher when lifecycle scripts are
+    # disabled. Python exec does not provide the shell's ENOEXEC fallback.
+    # Keep the shell program fixed: every command/argument stays a literal argv.
+    return ['bash', '-c', 'exec "$@"', '--', *argv] if argv[0] == 'pnpm' else argv
+
+
 def run(argv, cwd, *, capture=False):
     print('+ ' + shlex.join(map(str, argv)), flush=True)
-    result = subprocess.run(argv, cwd=cwd, text=True, stdout=subprocess.PIPE if capture else None,
+    result = subprocess.run(package_manager_argv(argv), cwd=cwd, text=True, stdout=subprocess.PIPE if capture else None,
                             stderr=subprocess.STDOUT if capture else None, timeout=600)
     if capture:
         print(result.stdout, end='', flush=True)
@@ -502,7 +509,7 @@ def install(plan, root):
         node_versions(plan, root)
         if node['manager_version']:
             run(['npm', 'install', '--global', '--ignore-scripts', '--no-audit', '--no-fund', node['manager'] + '@' + node['manager_version']], root)
-        actual = subprocess.check_output([node['manager'], '--version'], cwd=root, text=True).strip()
+        actual = subprocess.check_output(package_manager_argv([node['manager'], '--version']), cwd=root, text=True).strip()
         require(not node['manager_version'] or actual == node['manager_version'], 'Package manager version mismatch')
         if node['lock']:
             cmd = ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'] if node['manager'] == 'npm' else ['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts', '--store-dir', os.environ['CI_NODE_STORE']]

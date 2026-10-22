@@ -34,9 +34,18 @@ jobs:
       npm_config_fetch_retry_mintimeout: '1000'
       npm_config_fetch_retry_maxtimeout: '10000'
       npm_config_ignore_scripts: 'true'
-      npm_config_enable_pre_post_scripts: 'false'
-      npm_config_manage_package_manager_versions: 'false'
+      # pnpm 10 drops lowercase npm_* false values in nested script environments.
+      NPM_CONFIG_ENABLE_PRE_POST_SCRIPTS: 'false'
+      NPM_CONFIG_MANAGE_PACKAGE_MANAGER_VERSIONS: 'false'
       npm_config_engine_strict: 'true'
+      # pnpm >=11 no longer reads npm_config_*; retain the same policy for both.
+      pnpm_config_fetch_retries: '1'
+      pnpm_config_fetch_retry_mintimeout: '1000'
+      pnpm_config_fetch_retry_maxtimeout: '10000'
+      pnpm_config_ignore_scripts: 'true'
+      pnpm_config_enable_pre_post_scripts: 'false'
+      pnpm_config_pm_on_fail: error
+      pnpm_config_engine_strict: 'true'
       UV_HTTP_RETRIES: '1'
       UV_HTTP_TIMEOUT: '30'
       UV_PYTHON_DOWNLOADS: never
