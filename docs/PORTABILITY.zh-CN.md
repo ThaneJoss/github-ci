@@ -25,3 +25,5 @@
 运行`python3 tools/check_portability.py`。它检查公开workflow、调用样例与辅助脚本中的常见仓库身份上下文、环境变量、路由inputs和remote URL读取。工具没有用户项目名单、不访问GitHub、不参与项目运行时分流。静态模式检查不能证明任意混淆代码没有身份依赖，因此仍需正常代码审阅。
 
 检查覆盖公开 workflows、caller examples、helpers 与自动运行时源码。泛化 fixture 使用陌生名称并验证更名不改变检测结果；具体执行结果以验证记录和对应 GitHub run 为准。
+
+格式校验器也在可移植性扫描范围内。识别规则依据格式扩展名、标准配置文件约定或实际源码语法特征；例如 `.assetsignore` 与 `.nojekyll` 分别有 Gitignore 格式和零内容校验，不能只凭文件名跳过。D1 迁移目录由标准配置提供，模板不内置调用项目的路径。独立合成格式 fixture 和回归覆盖任意目录、多 workspace 成员、未知格式拒绝、无效格式失败及工具缺失，不以真实调用仓库作为唯一测试或生成特例。

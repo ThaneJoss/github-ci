@@ -1,0 +1,5 @@
+{
+  // Comments and a trailing comma; no application-specific configuration.
+  "url": "https://example.invalid/a//b",
+  "enabled": true,
+}

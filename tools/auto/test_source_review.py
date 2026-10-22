@@ -29,7 +29,7 @@ class MixedSources(unittest.TestCase):
             {'index.js': 'const n = 1;\n', 'app.py': 'value = 1\n'},
         ]
         for runtime in runtimes:
-            for source in ['infra/main.tf', 'src/Main.java', 'main.rs', 'script.sh', 'source.unknown']:
+            for source in ['infra/main.tf', 'src/Main.java', 'main.rs', 'script.fish', 'source.unknown']:
                 with self.subTest(runtime=list(runtime), source=source):
                     with self.assertRaisesRegex(auto.Invalid, 'Unsupported source'):
                         self.detect({**runtime, source: 'invalid unchecked source\n'})

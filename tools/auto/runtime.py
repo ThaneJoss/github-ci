@@ -9,6 +9,7 @@ import argparse
 import ast
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -32,10 +33,20 @@ UNSUPPORTED = {'yarn.lock', 'bun.lock', 'bun.lockb', 'poetry.lock', 'Pipfile', '
                'CMakeLists.txt', 'mix.exs', 'mix.lock', 'pdm.lock'}
 MAX_FILE = 8 * 1024 * 1024
 MAX_FILES = 20000
+DOCUMENT_EXTENSIONS = {'.md', '.markdown', '.yaml', '.yml', '.txt', '.rst', '.adoc',
+                       '.csv', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.pdf',
+                       '.ttf', '.otf', '.woff', '.woff2'}
+DOCUMENT_NAMES = {'.gitattributes', '.editorconfig', 'LICENSE', 'LICENCE', 'COPYING', 'NOTICE'}
+RUNTIME_METADATA_NAMES = {'.nvmrc', '.node-version', '.npmrc', '.python-version',
+                          'mypy.ini', '.mypy.ini', 'pytest.ini', '.coveragerc', 'uv.lock'}
+# Explicit sibling path: both files are embedded from the same workflow commit.
+# Python -I must never import a caller's same-named module from cwd/PYTHONPATH.
+_format_spec = importlib.util.spec_from_file_location('ci_formats', Path(__file__).with_name('formats.py'))
+formats = importlib.util.module_from_spec(_format_spec)
+_format_spec.loader.exec_module(formats)
 
 
-class Invalid(ValueError):
-    pass
+Invalid = formats.Invalid
 
 
 def require(ok, message):
@@ -279,6 +290,19 @@ def discover(root, overrides=None):
     for key in ['lockfile', 'package-manager', 'package-manager-version', 'audit-command', 'docs-command', 'lightweight-node-version']:
         require(not overrides.get(key), f'{key} belongs to explicit node/python/docs mode; auto uses standard metadata and native audits')
     files = tracked(root)
+    format_files = {}
+    source_extensions = {'.js', '.mjs', '.cjs', '.py', '.sql', '.ts', '.tsx', '.jsx', '.vue',
+                         '.html', '.css', '.scss', '.sass', '.less'}
+    for value in files:
+        path = Path(value)
+        kind = formats.known_kind(path)
+        if (not kind and path.suffix.lower() not in DOCUMENT_EXTENSIONS | source_extensions
+                and path.name not in UNSUPPORTED | DOCUMENT_NAMES | RUNTIME_METADATA_NAMES):
+            kind = formats.content_kind(root / value)
+        if kind:
+            format_files.setdefault(kind, []).append(value)
+    if any(Path(p).suffix.lower() == '.sql' for p in files):
+        format_files['sqlite'] = formats.sqlite_paths(root, files)
     names = set(files)
     require(files, 'No committed files to check')
     plan = {'schema': 1, 'files': files, 'checks': [], 'notes': [], 'node': None, 'python': None,
@@ -301,7 +325,7 @@ def discover(root, overrides=None):
     require(not any(p in names for p in LOCKS) or package is not None, 'Node lock requires root package.json')
     js_files = [p for p in files if Path(p).suffix in {'.js', '.mjs', '.cjs'}]
     py_files = [p for p in files if p.endswith('.py')]
-    if package is not None or js_files:
+    if package is not None or js_files or format_files.get('javascript-module'):
         package = package or {}
         members = [str(Path(p).parent) for p in node_manifests if p != 'package.json']
         root_locks = [p for p in LOCKS if p in names]
@@ -442,11 +466,9 @@ def discover(root, overrides=None):
     for path in lock_paths:
         plan['locks'][path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
     # A supported runtime must not hide an unchecked secondary language/stack.
-    document_extensions = {'.md', '.markdown', '.json', '.yaml', '.yml', '.toml', '.txt', '.rst', '.adoc',
-                           '.csv', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.pdf',
-                           '.ttf', '.otf', '.woff', '.woff2'}
-    metadata_names = {'.gitignore', '.gitattributes', '.editorconfig', 'LICENSE', 'LICENCE', 'COPYING', 'NOTICE'}
+    metadata_names = set(DOCUMENT_NAMES)
     supported_sources = set(js_files + py_files + lock_paths)
+    supported_sources.update(p for paths in format_files.values() for p in paths)
     if plan['node']:
         metadata_names.update({'.nvmrc', '.node-version', '.npmrc'})
         if any(c['kind'] in {'lint', 'typecheck', 'build'}
@@ -455,12 +477,16 @@ def discover(root, overrides=None):
     if plan['python']:
         metadata_names.update({'.python-version', 'mypy.ini', '.mypy.ini', 'pytest.ini', '.coveragerc'})
     code = [p for p in files if p not in supported_sources
-            and Path(p).suffix.lower() not in document_extensions and Path(p).name not in metadata_names]
-    require(not code, f'Unsupported source without an automatic check: {code[:5]}; use an explicit workflow')
+            and Path(p).suffix.lower() not in DOCUMENT_EXTENSIONS and Path(p).name not in metadata_names]
+    require(not code, f'Unsupported source without an automatic check ({len(code)} files): {code}; use an explicit workflow')
+    plan['checks'][:0] = [{'kind': 'format', 'mode': 'format', 'format': kind, 'files': paths,
+                          'label': f'{kind} syntax/format ({len(paths)} files; not tests)'}
+                         for kind, paths in sorted(format_files.items())]
     if not plan['node'] and not plan['python']:
         docs = [p for p in files if Path(p).suffix.lower() in {'.md', '.markdown', '.json'}]
-        require(docs, 'No supported code or Markdown/JSON documents')
-        plan['checks'].append({'kind': 'docs', 'files': docs, 'label': 'Offline Markdown/JSON validation (not tests)'})
+        require(docs or format_files, 'No supported code, formats or Markdown/JSON documents')
+        if docs:
+            plan['checks'].append({'kind': 'docs', 'files': docs, 'label': 'Offline Markdown/JSON validation (not tests)'})
     for kind in ['lint', 'typecheck', 'test', 'build', 'integration', 'browser']:
         command = overrides.get(kind + '-command', '')
         if command:
@@ -502,6 +528,14 @@ def node_versions(plan, root):
 
 
 def install(plan, root):
+    if any(c.get('format') in formats.TOOL_KINDS for c in plan['checks']):
+        folder = Path(os.environ['CI_AUTO_DIR']) / 'format-tools'
+        # The controller uses Ubuntu 24.04's Python 3.12 independently of caller Python.
+        run([sys.executable, '-I', '-m', 'venv', str(folder)], Path('/'))
+        run([str(folder / 'bin/python'), '-I', '-m', 'pip', '--isolated', 'install',
+             '--disable-pip-version-check', '--retries', '1', '--timeout', '30',
+             '--require-hashes', '--only-binary=:all:', '-r',
+             str(Path(__file__).with_name('requirements-formats.txt'))], Path('/'))
     if plan['system_packages']:
         run(['sudo', 'apt-get', '-o', 'Acquire::Retries=1', '-o', 'Acquire::http::Timeout=30', 'update'], root)
         run(['sudo', 'apt-get', '-o', 'Acquire::Retries=1', '-o', 'Acquire::http::Timeout=30', 'install', '-y', '--no-install-recommends', *plan['system_packages'].split()], root)
@@ -578,6 +612,8 @@ def check_docs(root, files):
 
 
 def execute(plan, root, state_file):
+    # Capture the selected Node before adding any caller Python executables.
+    node_parser = shutil.which('node')
     if plan['python'] and plan['python']['uv']:
         os.environ['PATH'] = str(root / '.venv/bin') + os.pathsep + os.environ['PATH']
     state = {'checks': [], 'tests': 'not-run', 'complete': False}
@@ -590,7 +626,14 @@ def execute(plan, root, state_file):
             state['checks'].append(record)
             save()
             mode = check.get('mode')
-            if mode == 'javascript':
+            if mode == 'format':
+                if check['format'] in formats.TOOL_KINDS:
+                    python = Path(os.environ['CI_AUTO_DIR']) / 'format-tools/bin/python'
+                    run([str(python), '-I', str(Path(__file__).with_name('formats.py')),
+                         check['format'], *check['files']], root)
+                else:
+                    formats.validate(check['format'], root, check['files'], node=node_parser)
+            elif mode == 'javascript':
                 for path in check['files']:
                     run(['node', '--check', path], root)
             elif mode == 'python':

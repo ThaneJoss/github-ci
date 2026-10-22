@@ -35,6 +35,29 @@ Actions 来源及固定 SHA 沿用 [action-pins.json](action-pins.json)。action
 
 这组回归证明 Ubuntu/Node 24 下的模板启动兼容和轻量冻结安装，不证明调用业务项目已经恢复；使用 `@main` 的调用方须新触发并完成自身检查，仍固定旧 SHA 的调用方须先更新引用。
 
+## 通用格式识别回归（2026-10-22）
+
+本轮以 main `4e1cb6ce1982c7a91b09f192b8f458a2c975563f` 为基线，保留 pnpm 启动兼容修复。新增独立 `formats` fixture，在任意目录放置 JSONC、dotenv、XML、_headers、Gitignore 规则、空标记、SQLite SQL、Shell 和非标准后缀 ES 模块；不复用真实业务源码作为 fixture。维护 CI 将该 fixture 与既有九类 fixture 一起通过相同自动入口执行。
+
+本地执行通过：88 项自动回归、47 项 helper 测试、33 项可移植性用例、actionlint 1.7.12、171 项 workflow Gate 真值表与自动测试中的 76 项 Gate 用例、生成一致性、文档离线链接及 diff 检查。六种真实 npm/pnpm launcher smoke 均通过，包含冻结安装、嵌套测试、原生审计、禁用 hooks、失败传播及锁不匹配拒绝。独立格式 fixture 实跑 detect/install/execute，使用哈希锁定的独立工具环境，10 项检查成功且 tests=not-run；将 SQL 改为无效语法后，实际解析器子进程失败，完成标记保持 false。该环境已有 npm prefix 指向未提供 semver 的用户目录，端到端 harness 显式选用已安装 Node 的正确 prefix 后完成；没有据此修改模板的 Node 版本规则。
+
+格式回归包含有效/无效输入、字符串中的 JSONC 注释标记、dotenv 不执行展开、XML 外部实体拒绝、Shell 不执行文件或启动脚本、模块语法错误及 Python 环境中的伪 Node 不遮蔽解析器、SQL 未知方言/目录范围/恶意配置/模板/错误吞没拒绝、真实解析器缺失与失败传播、多 workspace 成员，以及超过五项未知源码的完整诊断。原有未知源码测试中的不支持 Shell 样例改为 fish；sh/bash 由新的正反语法用例覆盖，不把其语法通过当成执行通过。
+
+以下仅为只读兼容验收集，未写入这些仓库分支。每个临时副本重新 fetch PR head 后执行 discovery、所有格式校验和已发现的 JS/Python 原生语法检查，全部通过；应用 scripts、测试、构建和项目依赖审计未执行，不能据此合并调用方 PR 或声称应用 CI 已绿。模板实现、工具配置与合成测试不含这些项目的名字、目录白名单或豁免。
+
+| 只读 PR | 验收 head | 格式文件数 |
+| --- | --- | --- |
+| [title2doi #3](https://github.com/ThaneJoss/title2doi/pull/3) | `3423111216542cc61f87649c302c83c551efafb5` | 9 |
+| [cloudflare-speed-test #3](https://github.com/ThaneJoss/cloudflare-speed-test/pull/3) | `a0f7b8988a54210a660b493d0acdf3cbacc501ac` | 9 |
+| [flowmaster #20](https://github.com/ThaneJoss/flowmaster/pull/20) | `8b296d4eb3cb389bae8b38316516a2f608df0191` | 12 |
+| [epub #6](https://github.com/ThaneJoss/epub/pull/6) | `38c8bdc176bcc89016d2e5461db89dfb1a7554de` | 6 |
+| [fast #22](https://github.com/ThaneJoss/fast/pull/22) | `31848816c078805f27d7848e95033c612dbdf6cc` | 13 |
+| [file-transfer #48](https://github.com/ThaneJoss/file-transfer/pull/48) | `8bb322b71e06546caf707cb2eaec39030cf6a2dc` | 20 |
+| [webapps #120](https://github.com/ThaneJoss/webapps/pull/120) | `daf713af23401f7701ea637754463e2b107f2add` | 10 |
+| [cloudflare-usage-guard #18](https://github.com/ThaneJoss/cloudflare-usage-guard/pull/18) | `a49aaaf2af7faef9b0ad49e69710b8faa1f0060d` | 17 |
+
+完整扫描纠正了日志中的类型假设：验收集内域名文件名的六个文件实际为 ES 模块，不是 IP/hosts 数据。它们通过通用内容特征选择 Node 模块语法检查；没有按域名或所在目录识别。SQL 合计九个文件，均位于标准 D1 配置声明的迁移范围。该验收不额外宣称支持任意名称的 hosts 数据、未声明方言 SQL、其他 Shell/数据库方言或所有模块格式；准确边界见[格式契约](AUTOMATIC.zh-CN.md#文件格式与辅助源码)。远端 CI 和 bot 审查以此修复 PR 的最终 head Checks 为准，本记录不预先声称远端已通过。
+
 ## 未测与不可代替的边界
 
 未创建外部 caller 仓库，也未改业务项目，因此**跨仓调用、fork权限、旧多版本/多系统矩阵等价性、真实科研/应用覆盖、GPU训练、云平台、浏览器/部署验收、私有registry和整个run中途取消**未验收。自动模式的失败产物策略是不上传，不假称完成了各种第三方报告脱敏。

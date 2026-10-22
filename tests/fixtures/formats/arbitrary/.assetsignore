@@ -1,0 +1,3 @@
+# Gitignore-style syntax, compiled by the locked parser.
+**/cache/
+!keep.txt

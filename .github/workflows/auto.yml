@@ -85,6 +85,7 @@ jobs:
           import ast
           import fnmatch
           import hashlib
+          import importlib.util
           import json
           import os
           from pathlib import Path, PurePosixPath
@@ -108,10 +109,20 @@ jobs:
                          'CMakeLists.txt', 'mix.exs', 'mix.lock', 'pdm.lock'}
           MAX_FILE = 8 * 1024 * 1024
           MAX_FILES = 20000
+          DOCUMENT_EXTENSIONS = {'.md', '.markdown', '.yaml', '.yml', '.txt', '.rst', '.adoc',
+                                 '.csv', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.pdf',
+                                 '.ttf', '.otf', '.woff', '.woff2'}
+          DOCUMENT_NAMES = {'.gitattributes', '.editorconfig', 'LICENSE', 'LICENCE', 'COPYING', 'NOTICE'}
+          RUNTIME_METADATA_NAMES = {'.nvmrc', '.node-version', '.npmrc', '.python-version',
+                                    'mypy.ini', '.mypy.ini', 'pytest.ini', '.coveragerc', 'uv.lock'}
+          # Explicit sibling path: both files are embedded from the same workflow commit.
+          # Python -I must never import a caller's same-named module from cwd/PYTHONPATH.
+          _format_spec = importlib.util.spec_from_file_location('ci_formats', Path(__file__).with_name('formats.py'))
+          formats = importlib.util.module_from_spec(_format_spec)
+          _format_spec.loader.exec_module(formats)
 
 
-          class Invalid(ValueError):
-              pass
+          Invalid = formats.Invalid
 
 
           def require(ok, message):
@@ -355,6 +366,19 @@ jobs:
               for key in ['lockfile', 'package-manager', 'package-manager-version', 'audit-command', 'docs-command', 'lightweight-node-version']:
                   require(not overrides.get(key), f'{key} belongs to explicit node/python/docs mode; auto uses standard metadata and native audits')
               files = tracked(root)
+              format_files = {}
+              source_extensions = {'.js', '.mjs', '.cjs', '.py', '.sql', '.ts', '.tsx', '.jsx', '.vue',
+                                   '.html', '.css', '.scss', '.sass', '.less'}
+              for value in files:
+                  path = Path(value)
+                  kind = formats.known_kind(path)
+                  if (not kind and path.suffix.lower() not in DOCUMENT_EXTENSIONS | source_extensions
+                          and path.name not in UNSUPPORTED | DOCUMENT_NAMES | RUNTIME_METADATA_NAMES):
+                      kind = formats.content_kind(root / value)
+                  if kind:
+                      format_files.setdefault(kind, []).append(value)
+              if any(Path(p).suffix.lower() == '.sql' for p in files):
+                  format_files['sqlite'] = formats.sqlite_paths(root, files)
               names = set(files)
               require(files, 'No committed files to check')
               plan = {'schema': 1, 'files': files, 'checks': [], 'notes': [], 'node': None, 'python': None,
@@ -377,7 +401,7 @@ jobs:
               require(not any(p in names for p in LOCKS) or package is not None, 'Node lock requires root package.json')
               js_files = [p for p in files if Path(p).suffix in {'.js', '.mjs', '.cjs'}]
               py_files = [p for p in files if p.endswith('.py')]
-              if package is not None or js_files:
+              if package is not None or js_files or format_files.get('javascript-module'):
                   package = package or {}
                   members = [str(Path(p).parent) for p in node_manifests if p != 'package.json']
                   root_locks = [p for p in LOCKS if p in names]
@@ -518,11 +542,9 @@ jobs:
               for path in lock_paths:
                   plan['locks'][path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
               # A supported runtime must not hide an unchecked secondary language/stack.
-              document_extensions = {'.md', '.markdown', '.json', '.yaml', '.yml', '.toml', '.txt', '.rst', '.adoc',
-                                     '.csv', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.pdf',
-                                     '.ttf', '.otf', '.woff', '.woff2'}
-              metadata_names = {'.gitignore', '.gitattributes', '.editorconfig', 'LICENSE', 'LICENCE', 'COPYING', 'NOTICE'}
+              metadata_names = set(DOCUMENT_NAMES)
               supported_sources = set(js_files + py_files + lock_paths)
+              supported_sources.update(p for paths in format_files.values() for p in paths)
               if plan['node']:
                   metadata_names.update({'.nvmrc', '.node-version', '.npmrc'})
                   if any(c['kind'] in {'lint', 'typecheck', 'build'}
@@ -531,12 +553,16 @@ jobs:
               if plan['python']:
                   metadata_names.update({'.python-version', 'mypy.ini', '.mypy.ini', 'pytest.ini', '.coveragerc'})
               code = [p for p in files if p not in supported_sources
-                      and Path(p).suffix.lower() not in document_extensions and Path(p).name not in metadata_names]
-              require(not code, f'Unsupported source without an automatic check: {code[:5]}; use an explicit workflow')
+                      and Path(p).suffix.lower() not in DOCUMENT_EXTENSIONS and Path(p).name not in metadata_names]
+              require(not code, f'Unsupported source without an automatic check ({len(code)} files): {code}; use an explicit workflow')
+              plan['checks'][:0] = [{'kind': 'format', 'mode': 'format', 'format': kind, 'files': paths,
+                                    'label': f'{kind} syntax/format ({len(paths)} files; not tests)'}
+                                   for kind, paths in sorted(format_files.items())]
               if not plan['node'] and not plan['python']:
                   docs = [p for p in files if Path(p).suffix.lower() in {'.md', '.markdown', '.json'}]
-                  require(docs, 'No supported code or Markdown/JSON documents')
-                  plan['checks'].append({'kind': 'docs', 'files': docs, 'label': 'Offline Markdown/JSON validation (not tests)'})
+                  require(docs or format_files, 'No supported code, formats or Markdown/JSON documents')
+                  if docs:
+                      plan['checks'].append({'kind': 'docs', 'files': docs, 'label': 'Offline Markdown/JSON validation (not tests)'})
               for kind in ['lint', 'typecheck', 'test', 'build', 'integration', 'browser']:
                   command = overrides.get(kind + '-command', '')
                   if command:
@@ -578,6 +604,14 @@ jobs:
 
 
           def install(plan, root):
+              if any(c.get('format') in formats.TOOL_KINDS for c in plan['checks']):
+                  folder = Path(os.environ['CI_AUTO_DIR']) / 'format-tools'
+                  # The controller uses Ubuntu 24.04's Python 3.12 independently of caller Python.
+                  run([sys.executable, '-I', '-m', 'venv', str(folder)], Path('/'))
+                  run([str(folder / 'bin/python'), '-I', '-m', 'pip', '--isolated', 'install',
+                       '--disable-pip-version-check', '--retries', '1', '--timeout', '30',
+                       '--require-hashes', '--only-binary=:all:', '-r',
+                       str(Path(__file__).with_name('requirements-formats.txt'))], Path('/'))
               if plan['system_packages']:
                   run(['sudo', 'apt-get', '-o', 'Acquire::Retries=1', '-o', 'Acquire::http::Timeout=30', 'update'], root)
                   run(['sudo', 'apt-get', '-o', 'Acquire::Retries=1', '-o', 'Acquire::http::Timeout=30', 'install', '-y', '--no-install-recommends', *plan['system_packages'].split()], root)
@@ -654,6 +688,8 @@ jobs:
 
 
           def execute(plan, root, state_file):
+              # Capture the selected Node before adding any caller Python executables.
+              node_parser = shutil.which('node')
               if plan['python'] and plan['python']['uv']:
                   os.environ['PATH'] = str(root / '.venv/bin') + os.pathsep + os.environ['PATH']
               state = {'checks': [], 'tests': 'not-run', 'complete': False}
@@ -666,7 +702,14 @@ jobs:
                       state['checks'].append(record)
                       save()
                       mode = check.get('mode')
-                      if mode == 'javascript':
+                      if mode == 'format':
+                          if check['format'] in formats.TOOL_KINDS:
+                              python = Path(os.environ['CI_AUTO_DIR']) / 'format-tools/bin/python'
+                              run([str(python), '-I', str(Path(__file__).with_name('formats.py')),
+                                   check['format'], *check['files']], root)
+                          else:
+                              formats.validate(check['format'], root, check['files'], node=node_parser)
+                      elif mode == 'javascript':
                           for path in check['files']:
                               run(['node', '--check', path], root)
                       elif mode == 'python':
@@ -785,6 +828,344 @@ jobs:
                   print(f'Automatic CI error: {error}', file=sys.stderr)
                   raise SystemExit(1)
           PY_RUNTIME
+          cat > "$CI_AUTO_DIR/formats.py" <<'PY_FORMATS'
+          """Static format checks; embedded beside the trusted controller, never sourced.
+
+          Recognition uses extensions, documented file conventions or explicit module syntax.
+          No repository identities, deployment commands, database connections or shell eval.
+          """
+          from __future__ import annotations
+
+          import argparse
+          import configparser
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+          import sys
+          import tomllib
+          import xml.etree.ElementTree as ET
+
+          MAX_FILE = 8 * 1024 * 1024
+          TOOL_KINDS = {'sqlite', 'gitignore'}
+
+
+          class Invalid(ValueError):
+              pass
+
+
+          def require(ok, message):
+              if not ok:
+                  raise Invalid(message)
+
+
+          def read(path):
+              require(path.is_file() and not path.is_symlink(), f'Expected regular file: {path}')
+              require(path.stat().st_size <= MAX_FILE, f'File exceeds 8 MiB: {path}')
+              return path.read_text(encoding='utf-8')
+
+
+          def unique(pairs):
+              result = {}
+              for key, value in pairs:
+                  require(key not in result, 'Duplicate JSON key')
+                  result[key] = value
+              return result
+
+
+          def json_data(text, *, comments=False):
+              if comments:
+                  # Preserve strings and line positions. A regex comment substitution would
+                  # corrupt URLs, escaped quotes and comment delimiters inside strings.
+                  output = []
+                  index = 0
+                  while index < len(text):
+                      start = index
+                      if text[index] == '"':
+                          index += 1
+                          while index < len(text):
+                              if text[index] == '\\':
+                                  index += 2
+                              elif text[index] == '"':
+                                  index += 1
+                                  break
+                              else:
+                                  index += 1
+                          output.append(text[start:index])
+                      elif text.startswith('//', index):
+                          index += 2
+                          while index < len(text) and text[index] not in '\r\n':
+                              index += 1
+                          output.append(' ' * (index - start))
+                      elif text.startswith('/*', index):
+                          end = text.find('*/', index + 2)
+                          require(end >= 0, 'Unterminated JSONC comment')
+                          index = end + 2
+                          output.append(''.join(c if c in '\r\n' else ' ' for c in text[start:index]))
+                      else:
+                          output.append(text[index])
+                          index += 1
+                  text = ''.join(output)
+                  # JSONC ecosystem extension: one trailing comma after a value/member.
+                  tokens = list(re.finditer(r'"(?:[^"\\]|\\.)*"|[^\s]', text))
+                  positions = {token.start() for i, token in enumerate(tokens)
+                               if token[0] == ',' and i and i + 1 < len(tokens)
+                               and tokens[i - 1][0] not in {'[', '{', ',', ':'}
+                               and tokens[i + 1][0] in {']', '}'}}
+                  text = ''.join(' ' if i in positions else c for i, c in enumerate(text))
+              def constant(_):
+                  raise Invalid('Non-finite JSON number')
+              return json.loads(text, object_pairs_hook=unique, parse_constant=constant)
+
+
+          def dotenv(text):
+              """Strict Node-style assignment grammar; values are never interpolated."""
+              require(not re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', text), 'Control character in dotenv')
+              index = 0
+              keys = set()
+              while index < len(text):
+                  blank = re.match(r'[ \t\r\n]*(?:#[^\n]*(?:\n|$))?', text[index:])
+                  index += blank.end()
+                  if index == len(text):
+                      break
+                  if blank[0].lstrip().startswith('#'):
+                      continue
+                  assignment = re.match(r'(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*', text[index:])
+                  require(assignment, 'Expected dotenv NAME=value assignment')
+                  require(assignment[1] not in keys, 'Duplicate dotenv variable')
+                  keys.add(assignment[1])
+                  index += assignment.end()
+                  if index < len(text) and text[index] in {'"', "'"}:
+                      quote = text[index]
+                      index += 1
+                      while index < len(text) and text[index] != quote:
+                          if text[index] == '\\' and quote == '"':
+                              index += 1
+                          index += 1
+                      require(index < len(text), 'Unterminated dotenv quoted value')
+                      index += 1
+                      tail = re.match(r'[ \t\r]*(?:#[^\n]*)?(?:\n|$)', text[index:])
+                      require(tail, 'Unexpected text after dotenv quoted value')
+                      index += tail.end()
+                  else:
+                      end = text.find('\n', index)
+                      index = len(text) if end < 0 else end + 1
+
+
+          def headers(text):
+              """Cloudflare/Netlify-style _headers blocks, HTTP field-name grammar."""
+              field = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+              rules = 0
+              entries = 0
+              for line in text.splitlines():
+                  require(len(line) <= 2000, '_headers line exceeds 2000 characters')
+                  require(not re.search(r'[\x00-\x08\x0b-\x1f\x7f]', line), 'Control character in _headers')
+                  if not line.strip() or line.lstrip().startswith('#'):
+                      continue
+                  if not line.startswith((' ', '\t')):
+                      require(not rules or entries, '_headers route has no header entries')
+                      require(re.fullmatch(r'(?:/[^\s]*|https://[^/\s?#]+/[^\s]*)', line)
+                              and not line.startswith('//') and '?' not in line and '#' not in line,
+                              'Expected _headers absolute path or HTTPS URL pattern')
+                      require(line.count('*') <= 1, '_headers supports at most one splat per route')
+                      placeholders = re.findall(r':([A-Za-z]\w*)', line.removeprefix('https://'))
+                      require(len(set(placeholders)) == len(placeholders), 'Duplicate _headers route placeholder')
+                      rules += 1
+                      require(rules <= 100, '_headers exceeds 100 rules')
+                      entries = 0
+                  else:
+                      require(rules, '_headers field before a route')
+                      entry = line.strip()
+                      require(re.fullmatch(r'!\s+' + field, entry)
+                              or re.fullmatch(field + r':[ \t]*[^\r\n]*', entry), 'Invalid _headers field')
+                      entries += 1
+              require(not rules or entries, '_headers route has no header entries')
+
+
+          def sqlfluff_config(path):
+              config = configparser.ConfigParser(interpolation=None)
+              config.read_string(read(path))
+              return config.get('sqlfluff', 'dialect', fallback='').strip()
+
+
+          def sqlite_paths(root, files):
+              """Resolve dialects from standard declarations, without executing config."""
+              scopes = []
+              declarations = {}
+              for value in files:
+                  path = Path(value)
+                  if path.name == '.sqlfluff':
+                      dialect = sqlfluff_config(root / value)
+                      if dialect:
+                          declarations[path.parent] = dialect
+                  elif path.name in {'wrangler.json', 'wrangler.jsonc', 'wrangler.toml'}:
+                      text = read(root / value)
+                      config = tomllib.loads(text) if path.suffix == '.toml' else json_data(text, comments=path.suffix == '.jsonc')
+                      require(isinstance(config, dict), f'Expected configuration object: {value}')
+                      environments = config.get('env', {})
+                      require(isinstance(environments, dict), f'Expected Wrangler env object: {value}')
+                      for section in [config, *environments.values()]:
+                          require(isinstance(section, dict), f'Expected Wrangler environment object: {value}')
+                          bindings = section.get('d1_databases', [])
+                          require(isinstance(bindings, list), f'Expected D1 binding list: {value}')
+                          for binding in bindings:
+                              require(isinstance(binding, dict), f'Expected D1 binding object: {value}')
+                              directory = binding.get('migrations_dir', 'migrations')
+                              require(isinstance(directory, str) and directory and not Path(directory).is_absolute(),
+                                      f'D1 migrations_dir must be a relative directory: {value}')
+                              resolved = (root / path.parent / directory).resolve()
+                              require(resolved.is_relative_to(root), f'D1 migrations_dir leaves checkout: {value}')
+                              scopes.append(resolved.relative_to(root))
+              result = []
+              for value in files:
+                  path = Path(value)
+                  if path.suffix.lower() != '.sql':
+                      continue
+                  dialect = next((declarations[p] for p in path.parents if p in declarations), '')
+                  d1 = any(path.is_relative_to(scope) for scope in scopes)
+                  require(not dialect or dialect == 'sqlite', f'Unsupported SQL dialect {dialect!r}: {value}; automatic SQL currently supports SQLite only')
+                  require(dialect == 'sqlite' or d1,
+                          f'SQL dialect is not declared: {value}; use .sqlfluff [sqlfluff] dialect=sqlite or a Wrangler D1 migrations_dir')
+                  result.append(value)
+              return result
+
+
+          def known_kind(path):
+              name, suffix = path.name, path.suffix.lower()
+              if suffix in {'.json', '.jsonc', '.toml', '.xml', '.svg'}:
+                  return suffix[1:]
+              if re.fullmatch(r'\.(?:env|dev\.vars)(?:\.[A-Za-z0-9_-]+)*', name) or suffix == '.env':
+                  return 'dotenv'
+              if name in {'.gitignore', '.assetsignore'}:
+                  return 'gitignore'
+              if name == '.nojekyll':
+                  return 'empty-marker'
+              if name == '_headers':
+                  return 'headers'
+              if name == '.sqlfluff':
+                  return 'sqlfluff-config'
+              if suffix in {'.sh', '.bash'}:
+                  return 'shell'
+              return None
+
+
+          def content_kind(path):
+              """Conservative fallback for otherwise unknown filenames, not all text files."""
+              try:
+                  text = read(path)
+              except UnicodeError:
+                  return None
+              if re.match(r'#![^\n]*\b(?:bash|sh|dash)(?:\s|$)', text):
+                  return 'shell'
+              if re.search(r'^\s*(?:export\s+(?:default\b|(?:async\s+)?function\b|class\b|const\b|let\b|var\b|\{|\*)|import\s+(?:[\w*{]|[\'\"]))', text, re.M):
+                  return 'javascript-module'
+              return None
+
+
+          def syntax_process(argv, text, *, path):
+              # Do not inherit loader/startup injection into a static parser subprocess.
+              env = {k: v for k, v in os.environ.items()
+                     if k not in {'BASH_ENV', 'ENV', 'NODE_OPTIONS', 'SHELLOPTS', 'BASHOPTS'}
+                     and not k.startswith('BASH_FUNC_')}
+              result = subprocess.run(argv, input=text, text=True, capture_output=True, env=env, timeout=60, cwd='/')
+              # Syntax diagnostics can contain literal env values/source: only report path/status.
+              require(result.returncode == 0, f'Syntax validation failed: {path} ({Path(argv[0]).name}, exit {result.returncode})')
+
+
+          def validate(kind, root, files, *, node=None):
+              for value in files:
+                  path = root / value
+                  try:
+                      text = read(path)
+                      if kind in {'json', 'jsonc'}:
+                          json_data(text, comments=kind == 'jsonc')
+                      elif kind == 'toml':
+                          tomllib.loads(text)
+                      elif kind == 'dotenv':
+                          dotenv(text)
+                      elif kind in {'xml', 'svg'}:
+                          require(not re.search(r'<!\s*(?:DOCTYPE|ENTITY)\b', text, re.I), 'DTD/entities are not supported')
+                          ET.fromstring(text)
+                      elif kind == 'headers':
+                          headers(text)
+                      elif kind == 'empty-marker':
+                          require(not text, '.nojekyll must be empty')
+                      elif kind == 'sqlfluff-config':
+                          sqlfluff_config(path)
+                      elif kind == 'gitignore':
+                          from pathspec import GitIgnoreSpec
+                          require(not re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', text), 'Control character in ignore rules')
+                          GitIgnoreSpec.from_lines(text.splitlines())
+                      elif kind == 'shell':
+                          require('\0' not in text, 'NUL in shell source')
+                          shebang = text.splitlines()[0] if text else ''
+                          if shebang.startswith('#!'):
+                              match = re.fullmatch(r'#!\s*(?:/usr/bin/env[ \t]+)?(?:/(?:usr/)?bin/)?(bash|sh|dash)[ \t]*', shebang)
+                              require(match, 'Unsupported shell shebang/options; use an explicit syntax check')
+                              shell = match[1]
+                          else:
+                              shell = 'bash'
+                          argv = ['/bin/bash', '--noprofile', '--norc', '-n'] if shell == 'bash' else ['/bin/dash', '-n']
+                          syntax_process(argv, text, path=value)
+                      elif kind == 'javascript-module':
+                          binary = node or shutil.which('node')
+                          require(binary, 'Node is required for module syntax validation')
+                          syntax_process([binary, '--input-type=module', '--check'], text, path=value)
+                      elif kind == 'sqlite':
+                          from sqlfluff.core import FluffConfig, Linter
+                          # No local/user config, templates, noqa suppression, or in-file
+                          # config that could switch dialect/templater or skip a file.
+                          require(not re.search(r'^\s*--\s*sqlfluff\b', text, re.M), 'SQL inline parser directives are unsupported')
+                          config = FluffConfig(overrides={'dialect': 'sqlite', 'templater': 'raw',
+                                                         'large_file_skip_byte_limit': 0}, ignore_local_config=True)
+                          parsed = Linter(config=config).parse_string(text)
+                          if parsed.violations:
+                              error = parsed.violations[0]
+                              raise Invalid(f'SQLFluff SQLite parse error at line {error.line_no}, column {error.line_pos}')
+                          variant = parsed.root_variant()
+                          require(variant and variant.tree, 'SQL parser returned no tree')
+                          require(not list(variant.tree.recursive_crawl('unparsable')), 'Unparsed SQL content')
+                      else:
+                          raise Invalid(f'Unknown validator: {kind}')
+                  except Invalid as error:
+                      raise Invalid(f'Invalid {kind} file: {value}: {error}') from None
+                  except (ValueError, UnicodeError, ET.ParseError, configparser.Error) as error:
+                      # Do not echo source data, duplicate keys, dotenv values or SQL literals.
+                      raise Invalid(f'Invalid {kind} file: {value} ({type(error).__name__})') from None
+
+
+          if __name__ == '__main__':
+              parser = argparse.ArgumentParser()
+              parser.add_argument('kind', choices=sorted(TOOL_KINDS))
+              parser.add_argument('files', nargs='+')
+              args = parser.parse_args()
+              try:
+                  validate(args.kind, Path.cwd(), args.files)
+              except (Invalid, OSError, subprocess.SubprocessError) as error:
+                  print(error, file=sys.stderr)
+                  raise SystemExit(1)
+          PY_FORMATS
+          cat > "$CI_AUTO_DIR/requirements-formats.txt" <<'format_requirements'
+          # Isolated format validators: CPython 3.12, Linux x86_64 (ubuntu-24.04).
+          # Exact wheel hashes verified against PyPI; never installed into caller environments.
+          chardet==7.7.0 --hash=sha256:feb66c96264e3e6a9ff0c7318ce0028800b6c18ad07c8000d2404a108d1ef767
+          click==8.4.2 --hash=sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76
+          colorama==0.4.6 --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+          diff_cover==10.6.0 --hash=sha256:a701553060f72d59b81f9cb1645b75ef66204427eb9dd99873c91092220e52ce
+          jinja2==3.1.6 --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
+          markupsafe==3.0.4 --hash=sha256:8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581
+          pathspec==1.1.1 --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+          platformdirs==4.13.5 --hash=sha256:53d3ec4280b815c1e0b02edad7f9ee8fda1ba9c0865dd9c2e6e63849ce82fc1e
+          pluggy==1.7.0 --hash=sha256:7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec
+          pygments==2.21.0 --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
+          pyyaml==6.0.3 --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc
+          regex==2026.9.29 --hash=sha256:39ab5894d971f9ac68baa6eca5c50387db579cfcacf36ae8df3feceb1815e6d0
+          sqlfluff==4.4.0 --hash=sha256:65b1f139534ae1f18ca6e9ec1b24b09598d0b95d1336f927bf39d399ecb39109
+          tblib==3.2.2 --hash=sha256:26bdccf339bcce6a88b2b5432c988b266ebbe63a4e593f6b578b1d2e723d2b76
+          tqdm==4.70.1 --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73
+          format_requirements
           /usr/bin/python3 -I "$CI_AUTO_DIR/runtime.py" detect
       - name: Set up declared Node
         id: node
