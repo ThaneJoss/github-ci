@@ -4,11 +4,13 @@
 
 修复 Node 连续命令中前一组失败、取消或空测试被后一组成功掩盖的问题；逐组验证完整 TAP/spec 结果，并记录真实测试数。修复 workspace 中一个成员的 lint/typecheck/build 被错误用作其他成员前端源码覆盖的问题；覆盖判定按最近 package 和 override 后实际计划执行。新增 18 项回归包含真实 Node TAP/spec 正反执行、嵌套 subtest、同级/嵌套成员、npm/pnpm 与 override 边界。
 
-补充 integration/browser 的 NOT RUN 摘要及维护 CI 的 merge_group 触发；专项检查仍通过既有显式接口接入。维护 PR 直接引用 GitHub 官方 Dependency Review 引擎及本仓声明式策略，失败进入既有 checks/Gate；来源、更新与公共/私有仓库边界见 [上游引用说明](UPSTREAM.zh-CN.md)。
+补充 integration/browser 的 NOT RUN 摘要及维护 CI 的 merge_group 触发；专项检查仍通过既有显式接口接入。维护 CI 下载固定版本、校验 SHA256 的 Google OSV Scanner 官方引擎，扫描本仓两份工具 requirements 锁；漏洞规则在执行时从 OSV 数据库加载，发现漏洞或扫描失败进入既有 checks/Gate。来源、扫描范围与更新边界见 [上游引用说明](UPSTREAM.zh-CN.md)。
 
 本地验证：107 项自动回归、47 项 helper、33 项可移植性用例、171 项维护 Gate 情形和自动测试中的 76 项 Gate 情形通过；actionlint 1.7.12、生成一致性、文档离线链接及 diff 检查通过。六种真实 npm/pnpm launcher smoke 均通过，包含冻结安装、嵌套行为测试、原生审计、禁用 hooks、失败传播与锁不匹配拒绝。Node 24 在维护回归前显式设置，避免依赖 runner 默认 Node。
 
-远端 fixtures 和新引用 Action 的服务端结果以本轮 PR 的 Checks 为准；本地检查不证明 GitHub 依赖图服务已经执行，也不证明调用方原有浏览器、部署或安装验收已恢复。
+OSV Scanner v2.7.0 本地识别工具锁中的 16 个包条目并成功完成；额外扫描现有五份 npm/pnpm/workspace/uv fixture 锁识别 6 个包条目并通过。已知有漏洞的 urllib3 1.26.5 负例退出 1，指定不存在的锁退出 127；未使用忽略错误或漏洞豁免。固定二进制更新需重新核对来源、哈希并通过 CI，漏洞数据库无需复制到本仓。
+
+远端 fixtures 和上游扫描器的实际执行结果以本轮 [PR #5](https://github.com/ThaneJoss/github-ci/pull/5) 最新提交的 Checks 为准；这些验证不证明调用方原有浏览器、部署或安装验收已恢复。
 
 ## 自动入口的真实 GitHub 验证
 
