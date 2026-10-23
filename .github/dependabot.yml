@@ -1,0 +1,12 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 1
+    allow:
+      # Other Actions also appear in generated auto.yml and its source template.
+      # Updating those requires the generation/verification workflow, not a
+      # standalone edit to generated YAML.
+      - dependency-name: actions/dependency-review-action

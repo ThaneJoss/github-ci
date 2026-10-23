@@ -1,0 +1,13 @@
+# Repository policy loaded by GitHub's upstream dependency-review-action.
+# Include build/test dependencies as well as runtime dependencies.
+fail-on-severity: high
+fail-on-scopes:
+  - runtime
+  - development
+  - unknown
+vulnerability-check: true
+license-check: false
+warn-only: false
+comment-summary-in-pr: never
+show-openssf-scorecard: false
+retry-on-snapshot-warnings: false

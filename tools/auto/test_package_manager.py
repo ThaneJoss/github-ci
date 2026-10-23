@@ -38,7 +38,7 @@ with open(os.environ['PM_CALL_LOG'], 'a') as log:
 if args == ['--version']:
     print(os.environ['PM_VERSION'])
 elif args[:1] == ['run']:
-    print('# tests 1\\n# skipped 0\\n# todo 0')
+    print('# tests 1\\n# suites 0\\n# pass 1\\n# fail 0\\n# cancelled 0\\n# skipped 0\\n# todo 0')
 if args[:1] == [os.environ.get('PM_FAIL_COMMAND', 'fail')]:
     sys.exit(42)
 ''')

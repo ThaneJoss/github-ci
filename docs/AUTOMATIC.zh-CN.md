@@ -2,7 +2,7 @@
 
 ## 主路径和结果含义
 
-默认 profile=auto；所有 inputs 可省略。入口执行 checkout → 只读发现 → 运行时准备 → 一次冻结安装 → 检查/审计 → Gate。发现本身不执行项目配置文件。摘要显示每项执行结果、版本选择来源和缺失的 lint/type/test/build。
+默认 profile=auto；所有 inputs 可省略。入口执行 checkout → 只读发现 → 运行时准备 → 一次冻结安装 → 检查/审计 → Gate。发现本身不执行项目配置文件。摘要显示每项执行结果、版本选择来源和缺失的 lint/type/test/build/integration/browser。
 
 quality-passed=true 表示本次计划中的检查和原生审计全部成功，**不表示项目有测试、满足全部产品需求或部署验收完成**。tests=not-run 表示没有测试执行；command-passed-count-unknown 只证明声明的测试命令退出成功，不伪造测试数；executed 来自受支持的真实 runner。语法检查和文档验证从不计为测试。
 
@@ -65,9 +65,13 @@ SQLFluff 不加载 caller 或用户的配置、插件和 Python 模块；`.sqlfl
 | test | test:ci → test → test:unit |
 | build | build:ci → build |
 
-不把 check/start/dev/prepare 任意脚本视为测试。逐个检查根包及 workspace 成员：没有 test script 的包，只对其所属 *.test.js/*.test.mjs/*.test.cjs（同样支持 .spec）中明确导入 node:test 的文件使用 Node 内置 runner；文件归属最近的包，其他成员的 test script 不会关闭此回退。其余情况显示 NOT RUN。Node 内置 runner（包括由嵌套脚本调用）必须报告非零测试数，不允许已识别的 skip/todo。其他测试 runner 仅证明命令成功；如需严格计数/skip 策略，用项目自己的 CI script 明确保证。
+不把 check/start/dev/prepare 任意脚本视为测试，也不自动遍历 test:*。逐个检查根包及 workspace 成员：没有 test script 的包，只对其所属 *.test.js/*.test.mjs/*.test.cjs（同样支持 .spec）中明确导入 node:test 的文件使用 Node 内置 runner；文件归属最近的包，其他成员的 test script 不会关闭此回退。其余情况显示 NOT RUN。Node 内置 runner（包括由嵌套脚本调用）逐组校验 TAP/spec 的完整 tests/suites/pass/fail/cancelled/skipped/todo 摘要；每组必须非零、全部通过且无取消/skip/todo，缺失、重复或不一致的计数均拒绝。前一组失败或空测试不能被后续成功组掩盖；成功时记录各组实际测试数之和。其他测试 runner 仅证明命令成功；如需严格计数/skip 策略，用项目自己的 CI script 明确保证。
 
-所有 JS 语法检查只针对跟踪文件；TypeScript/JSX/Vue 至少需要声明 lint/typecheck/build，不能以 node --check 冒充。Vue 项目应在标准 typecheck script 使用 vue-tsc；模板不能把缺失的 Vue 检查说成已有。
+所有 JS 语法检查只针对跟踪文件；TypeScript/JSX/Vue 及 HTML/CSS 等前端源码，按最近 package.json 所属包要求实际保留的 lint/typecheck/build 检查。根包、同级或父成员的脚本不能替另一个成员证明覆盖，也不能以 node --check 冒充。Vue 项目应在标准 typecheck script 使用 vue-tsc；模板不能把缺失的 Vue 检查说成已有。
+
+auto 的 lint/typecheck/build-command 会替换同种发现检查，覆盖判定使用替换后的实际计划；显式根命令只作为根包的检查，已移除的成员脚本不再算覆盖。需要由一个根命令负责整个 workspace 时，使用显式 profile: node 表达该检查契约。模板只能核实检查的声明和执行，不能静态证明任意项目脚本检查了全部语义。
+
+集成和浏览器检查通过已选 test:ci 等脚本显式串联，或使用 integration-command/browser-command；没有明确接入时摘要标为 NOT RUN，不因源码语法通过就声称专项验收完成。迁移时需要保留的浏览器、Worker、部署、安装或兼容矩阵，应由调用方保留相应明确入口。
 
 安装禁用 lifecycle scripts，运行检查禁用自动 pre/post hooks，避免因安装/测试顺带发布。依赖需要 native postinstall 时使用经过审阅的显式模式或项目 CI command。auto 拒绝选中脚本中直接的 deploy/publish/release/train/download/curl/wget、占位测试、--passWithNoTests、--if-present、|| true；允许 wrangler deploy --dry-run。会递归检查字面 npm/pnpm run/run-script 引用的脚本，支持 run 前后的 --silent 等日志选项，以及 npm --loglevel / pnpm --reporter；--workspace/--prefix/--filter 等改变目标上下文的选项要求显式模式，不能按当前包误判。**这只是直接误配置拦截，无法静态证明任意脚本内部安全**；项目自己的 CI scripts 仍应只做本地、轻量检查，不能连接生产或下载大数据。
 

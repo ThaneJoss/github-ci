@@ -1,5 +1,15 @@
 # 验证记录与验收边界
 
+## 结果证明与成员覆盖修复（2026-10-24）
+
+修复 Node 连续命令中前一组失败、取消或空测试被后一组成功掩盖的问题；逐组验证完整 TAP/spec 结果，并记录真实测试数。修复 workspace 中一个成员的 lint/typecheck/build 被错误用作其他成员前端源码覆盖的问题；覆盖判定按最近 package 和 override 后实际计划执行。新增 18 项回归包含真实 Node TAP/spec 正反执行、嵌套 subtest、同级/嵌套成员、npm/pnpm 与 override 边界。
+
+补充 integration/browser 的 NOT RUN 摘要及维护 CI 的 merge_group 触发；专项检查仍通过既有显式接口接入。维护 PR 直接引用 GitHub 官方 Dependency Review 引擎及本仓声明式策略，失败进入既有 checks/Gate；来源、更新与公共/私有仓库边界见 [上游引用说明](UPSTREAM.zh-CN.md)。
+
+本地验证：107 项自动回归、47 项 helper、33 项可移植性用例、171 项维护 Gate 情形和自动测试中的 76 项 Gate 情形通过；actionlint 1.7.12、生成一致性、文档离线链接及 diff 检查通过。六种真实 npm/pnpm launcher smoke 均通过，包含冻结安装、嵌套行为测试、原生审计、禁用 hooks、失败传播与锁不匹配拒绝。Node 24 在维护回归前显式设置，避免依赖 runner 默认 Node。
+
+远端 fixtures 和新引用 Action 的服务端结果以本轮 PR 的 Checks 为准；本地检查不证明 GitHub 依赖图服务已经执行，也不证明调用方原有浏览器、部署或安装验收已恢复。
+
 ## 自动入口的真实 GitHub 验证
 
 自动入口首个全绿提交 [5445f5879fcb2dd07240490497e7b249715a73e2](https://github.com/ThaneJoss/github-ci/commit/5445f5879fcb2dd07240490497e7b249715a73e2) 的 [Template validation run 38351517899](https://github.com/ThaneJoss/github-ci/actions/runs/38351517899) 成功。9 类泛化 fixtures：npm、pnpm、零依赖 JS＋Python 标准库打包、Python/uv＋7zz、Python标准库、Python patch 下限、纯 docs、无测试命令、npm workspace。22 个实际派发 job 成功，其他未选 profile 为预期 skipped；runner 执行时间合计152秒，包含所有 fixture 和各 Gate，不是一个调用方的成本或实际账单，也不是加速倍数。
