@@ -3,6 +3,7 @@ name: Template validation
   push:
     branches: [main]
   pull_request: {}
+  merge_group: {}
   workflow_dispatch: {}
 permissions:
   contents: read
@@ -18,6 +19,50 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Scan template tool locks with the upstream Google OSV engine
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          osv_dir="$(mktemp -d "$RUNNER_TEMP/github-ci-osv.XXXXXX")"
+          trap 'rm -rf "$osv_dir"' EXIT
+          curl --fail --show-error --location --retry 1 --connect-timeout 15 --max-time 120 \
+            https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64 \
+            --output "$osv_dir/osv-scanner"
+          printf '%s  %s\n' '160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b' "$osv_dir/osv-scanner" | sha256sum --check -
+          chmod +x "$osv_dir/osv-scanner"
+          "$osv_dir/osv-scanner" --version
+          # An empty explicit config prevents local ignore rules from hiding findings.
+          : > "$osv_dir/strict-config.toml"
+          timeout 120 "$osv_dir/osv-scanner" scan source \
+            --config "$osv_dir/strict-config.toml" \
+            --no-call-analysis=go --no-call-analysis=rust --no-resolve --all-vulns \
+            --lockfile requirements.txt:tools/requirements-ci.txt \
+            --lockfile requirements.txt:tools/auto/requirements-formats.txt \
+            --format json --all-packages --output-file "$osv_dir/results.json"
+          python3 -I - "$osv_dir/results.json" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          expected = {str(Path(p).resolve()) for p in (
+              'tools/requirements-ci.txt', 'tools/auto/requirements-formats.txt')}
+          results = json.loads(Path(sys.argv[1]).read_text())['results']
+          seen = set()
+          count = 0
+          for result in results:
+              source = result['source']
+              packages = result['packages']
+              if source['type'] != 'lockfile' or not packages:
+                  raise SystemExit('OSV did not scan a nonempty required lockfile')
+              seen.add(source['path'])
+              count += len(packages)
+              if any(package.get('vulnerabilities') for package in packages):
+                  raise SystemExit('OSV reported vulnerabilities')
+          if seen != expected:
+              raise SystemExit('OSV report does not cover exactly the required tool locks')
+          print(f'Google OSV: {len(seen)} tool locks, {count} package entries, no reported vulnerabilities.')
+          PY
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
@@ -39,15 +84,15 @@ jobs:
         run: |
           actionlint -no-color -shellcheck='' .github/workflows/*.yml examples/*.yml
           python tools/validate.py
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
       - name: Verify generated exact-version runtime and automatic fixtures
         run: |
           python -m pip install --require-hashes --only-binary=:all: -r tools/auto/requirements-formats.txt
           python tools/auto/render.py --check
           python -m unittest discover -s tools/auto -p 'test_*.py'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-          package-manager-cache: false
       - name: Verify real package-manager launchers and frozen installs
         run: python tools/auto/smoke_package_manager.py
       - name: Test audit and content helpers

@@ -405,8 +405,6 @@ def discover(root, overrides=None):
                 plan['notes'].append(f'Node tests NOT RUN ({directory}): no conventional script or native node:test files')
         if js_files:
             plan['checks'].append({'kind': 'syntax', 'mode': 'javascript', 'files': js_files, 'label': 'JavaScript syntax (not tests)'})
-        require(not any(Path(p).suffix in {'.ts', '.tsx', '.jsx', '.vue'} for p in files) or any(c['kind'] in {'lint', 'typecheck', 'build'} for c in plan['checks']),
-                'TypeScript/JSX/Vue source needs a declared lint/typecheck/build script; Node syntax is insufficient')
     if pyproject is not None or py_files:
         pyproject = pyproject or {}
         project = pyproject.get('project', {})
@@ -462,6 +460,17 @@ def discover(root, overrides=None):
             plan['checks'].append({'kind': 'test', 'mode': 'unittest', 'files': tests, 'label': 'stdlib unittest'})
         else:
             plan['notes'].append('Python tests NOT RUN automatically: no supported tracked test files')
+    # Evaluate source coverage against the checks that will actually execute.
+    # A root override replaces that kind in every package, so removed member
+    # scripts must not continue to count as coverage for their source files.
+    explicit_source_check = False
+    for kind in ['lint', 'typecheck', 'test', 'build', 'integration', 'browser']:
+        command = overrides.get(kind + '-command', '')
+        if command:
+            safe_script(command)
+            plan['checks'] = [c for c in plan['checks'] if c['kind'] != kind]
+            plan['checks'].append({'kind': kind, 'cwd': '.', 'argv': ['bash', '-e', '-o', 'pipefail', '-c', command], 'label': f'explicit {kind} command'})
+            explicit_source_check |= kind in {'lint', 'typecheck', 'build'}
     require(not lock_paths or plan['node'] or plan['python'], 'Lock without a corresponding project manifest')
     for path in lock_paths:
         plan['locks'][path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
@@ -471,9 +480,18 @@ def discover(root, overrides=None):
     supported_sources.update(p for paths in format_files.values() for p in paths)
     if plan['node']:
         metadata_names.update({'.nvmrc', '.node-version', '.npmrc'})
-        if any(c['kind'] in {'lint', 'typecheck', 'build'}
-               and c.get('argv', [None])[0] == plan['node']['manager'] for c in plan['checks']):
-            supported_sources.update(p for p in files if Path(p).suffix in {'.ts', '.tsx', '.jsx', '.vue', '.html', '.css', '.scss', '.sass', '.less'})
+        covered_packages = {c.get('cwd') for c in plan['checks']
+                            if c['kind'] in {'lint', 'typecheck', 'build'}
+                            and c.get('argv', [None])[0] == plan['node']['manager']}
+        if explicit_source_check:
+            covered_packages.add('.')
+        frontend_files = [p for p in files if Path(p).suffix in
+                          {'.ts', '.tsx', '.jsx', '.vue', '.html', '.css', '.scss', '.sass', '.less'}]
+        uncovered = {p: owner(p) for p in frontend_files if owner(p) not in covered_packages}
+        require(not uncovered,
+                f'Unsupported source without a declared lint/typecheck/build check in its owning package: {uncovered}; '
+                'a root or sibling script does not prove member coverage; declare member checks or use an explicit workflow')
+        supported_sources.update(frontend_files)
     if plan['python']:
         metadata_names.update({'.python-version', 'mypy.ini', '.mypy.ini', 'pytest.ini', '.coveragerc'})
     code = [p for p in files if p not in supported_sources
@@ -487,17 +505,11 @@ def discover(root, overrides=None):
         require(docs or format_files, 'No supported code, formats or Markdown/JSON documents')
         if docs:
             plan['checks'].append({'kind': 'docs', 'files': docs, 'label': 'Offline Markdown/JSON validation (not tests)'})
-    for kind in ['lint', 'typecheck', 'test', 'build', 'integration', 'browser']:
-        command = overrides.get(kind + '-command', '')
-        if command:
-            safe_script(command)
-            plan['checks'] = [c for c in plan['checks'] if c['kind'] != kind]
-            plan['checks'].append({'kind': kind, 'cwd': '.', 'argv': ['bash', '-e', '-o', 'pipefail', '-c', command], 'label': f'explicit {kind} command'})
     plan['project_install_command'] = overrides.get('project-install-command', '')
     if plan['project_install_command']:
         safe_script(plan['project_install_command'])
     require(plan['checks'], 'No supported checks discovered')
-    for kind in ['lint', 'typecheck', 'test', 'build']:
+    for kind in ['lint', 'typecheck', 'test', 'build', 'integration', 'browser']:
         if not any(c['kind'] == kind for c in plan['checks']):
             plan['notes'].append(f'{kind}: NOT RUN (not declared/supported); not a passing check')
     return plan
@@ -654,9 +666,29 @@ def execute(plan, root, state_file):
                 output = run(check['argv'], root / check['cwd'], capture=check['kind'] == 'test')
                 if check['kind'] == 'test':
                     if check.get('node_test'):
-                        counts = re.findall(r'(?:#|ℹ) tests (\d+)', output)
-                        require(counts and sum(map(int, counts)) > 0, 'Node test runner reported no test cases')
-                        require(not re.search(r'(?:#|ℹ) (?:skipped|todo) [1-9]', output), 'Node test runner skipped tests/todo; explicit prerequisites required')
+                        # npm/pnpm only propagate the final shell command's status.
+                        # Validate every reported runner separately so an earlier
+                        # failed/empty run cannot hide behind a later successful one.
+                        plain = re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))', '', output)
+                        fields = {'tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo'}
+                        reports = []
+                        for line in plain.splitlines():
+                            match = re.fullmatch(r'(?:#|ℹ) (tests|suites|pass|fail|cancelled|skipped|todo) (\d+)', line)
+                            if not match:
+                                continue
+                            name, count = match.groups()
+                            if name == 'tests':
+                                reports.append({})
+                            require(reports and name not in reports[-1], 'Node test runner reported an incomplete or duplicate summary')
+                            reports[-1][name] = int(count)
+                        require(reports, 'Node test runner reported no test cases')
+                        for report in reports:
+                            require(set(report) == fields, 'Node test runner reported an incomplete summary')
+                            require(report['tests'] > 0, 'Node test runner reported no test cases in a suite')
+                            require(not (report['fail'] or report['cancelled']), 'Node test runner reported failed or cancelled tests')
+                            require(not (report['skipped'] or report['todo']), 'Node test runner skipped tests/todo; explicit prerequisites required')
+                            require(report['pass'] == report['tests'], 'Node test runner reported inconsistent test counts')
+                        record['executed_tests'] = sum(report['tests'] for report in reports)
                         state['tests'] = 'executed'
                     else:
                         state['tests'] = 'command-passed-count-unknown'

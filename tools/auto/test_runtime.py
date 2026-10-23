@@ -68,6 +68,19 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(inputs['profile']['default'], 'auto')
         self.assertFalse(any(value.get('required', False) for value in inputs.values()))
 
+    def test_specialized_scripts_remain_explicit_and_missing_checks_are_reported(self):
+        self.package(scripts={'check': 'node --version', 'test:e2e': 'node --version',
+                              'test:worker': 'node --version'})
+        plan = self.detect()
+        self.assertFalse(any(c['kind'] in {'test', 'integration', 'browser'} for c in plan['checks']))
+        for kind in ['integration', 'browser']:
+            self.assertIn(f'{kind}: NOT RUN (not declared/supported); not a passing check', plan['notes'])
+        explicit = self.detect(**{'integration-command': 'node --version',
+                                  'browser-command': 'node --version'})
+        for kind in ['integration', 'browser']:
+            self.assertTrue(any(c['kind'] == kind for c in explicit['checks']))
+            self.assertFalse(any(note.startswith(kind + ': NOT RUN') for note in explicit['notes']))
+
     def test_lock_mutation_fails(self):
         self.package()
         self.put('package-lock.json', {})
