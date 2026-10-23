@@ -32,4 +32,4 @@ GitHub 仍需要这个 caller 文件、基础权限，以及仓库自身正常�
 
 模板只按能力判断，不读取 owner/repo/项目名称；参见[可移植性契约](docs/PORTABILITY.zh-CN.md)。`@main` 是对自有共享 CI 入口的跟随策略；官方及第三方 Actions 仍固定完整 SHA，须审阅后更新，不随之改成浮动引用。内部相对 `uses: ./.github/workflows/...` 始终解析为入口选中的同一提交；自动运行时代码直接内嵌在该版本的 workflow 中，不执行 caller 的同名模板文件，也不额外从 `main` 下载脚本。调用方代码只在无 secret、contents:read 的 GitHub 托管 runner 上运行。
 
-[验证记录与边界](docs/VALIDATION.zh-CN.md) · [设计、安全及成本依据](docs/DESIGN.zh-CN.md) · [通过引用加载上游实现](docs/UPSTREAM.zh-CN.md) · [完整 caller 文件](examples/auto.yml)
+[验证记录与边界](docs/VALIDATION.zh-CN.md) · [设计、安全及成本依据](docs/DESIGN.zh-CN.md) · [上游引用与每周更新 PR](docs/UPSTREAM.zh-CN.md) · [完整 caller 文件](examples/auto.yml)

@@ -1,0 +1,78 @@
+name: Update upstream rules
+'on':
+  schedule:
+    # Monday 12:00 UTC+8 (04:00 UTC).
+    - cron: '0 4 * * 1'
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/update-upstream.yml'
+      - 'tools/upstream/**'
+permissions:
+  contents: read
+concurrency:
+  group: update-upstream-rules
+  cancel-in-progress: false
+jobs:
+  candidate:
+    name: Check and validate upstream release
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+      pin: ${{ steps.result.outputs.pin }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Test update and publishing safeguards
+        run: python -m unittest discover -s tools/upstream -p 'test_*.py'
+      - name: Check the latest official stable release
+        id: update
+        run: python tools/upstream/osv.py update --github-output "$GITHUB_OUTPUT"
+      - name: Verify the candidate binary and scan tool locks
+        timeout-minutes: 5
+        run: python tools/upstream/osv.py scan
+      - name: Record verified update result
+        id: result
+        env:
+          CHANGED: ${{ steps.update.outputs.changed }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          pin = json.loads(Path('tools/upstream/osv-scanner.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('pin=' + json.dumps(pin, separators=(',', ':')) + '\n')
+          changed = os.environ['CHANGED'] == 'true'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"OSV Scanner {pin['version']}: official digest and checksum verified; tool lock scan passed.\n\n")
+              summary.write('A version update is ready for a pull request.\n' if changed else 'No upstream version change; no empty pull request created.\n')
+          PY
+  publish:
+    name: Propose verified upstream update
+    needs: candidate
+    if: ${{ needs.candidate.outputs.changed == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create or reuse the update PR and start its validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OSV_PIN_JSON: ${{ needs.candidate.outputs.pin }}
+          DEFAULT_BRANCH: main
+        run: python3 tools/upstream/publish.py

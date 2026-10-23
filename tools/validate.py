@@ -53,6 +53,6 @@ for state, proof in itertools.product(['success', 'failure', 'cancelled', 'skipp
     assert (run.returncode == 0) == (state == 'success' and proof == 'true')
     gate_count += 1
 
-for helper in [*ROOT.glob('examples/helpers/*.py'), *ROOT.glob('tools/*.py'), *ROOT.glob('tools/auto/*.py')]:
+for helper in [*ROOT.glob('examples/helpers/*.py'), *ROOT.glob('tools/*.py'), *ROOT.glob('tools/auto/*.py'), *ROOT.glob('tools/upstream/*.py')]:
     ast.parse(helper.read_text())
 print(f'PASS: {len(files)} YAML files; {bash_count} bash blocks; {inline_count} inline Python blocks; {gate_count} Gate cases.')
