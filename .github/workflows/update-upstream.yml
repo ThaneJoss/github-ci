@@ -34,6 +34,8 @@ jobs:
         run: python -m unittest discover -s tools/upstream -p 'test_*.py'
       - name: Check the latest official stable release
         id: update
+        env:
+          OSV_RELEASE_READ_TOKEN: ${{ github.token }}
         run: python tools/upstream/osv.py update --github-output "$GITHUB_OUTPUT"
       - name: Verify the candidate binary and scan tool locks
         timeout-minutes: 5

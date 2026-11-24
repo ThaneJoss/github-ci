@@ -17,6 +17,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[2]
 PIN = Path(__file__).with_name('osv-scanner.json')
 RELEASE_API = 'https://api.github.com/repos/google/osv-scanner/releases/latest'
+RELEASE_TOKEN_ENV = 'OSV_RELEASE_READ_TOKEN'
 RELEASE_BASE = 'https://github.com/google/osv-scanner/releases/download/'
 ASSET = 'osv-scanner_linux_amd64'
 CHECKSUM_ASSET = 'osv-scanner_SHA256SUMS'
@@ -51,16 +52,51 @@ def asset_url(version, asset):
     return f'{RELEASE_BASE}v{version}/{asset}'
 
 
+class NoAuthenticatedRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        # urllib would otherwise carry Authorization to a redirect target.
+        return None
+
+
+def allows_anonymous_release_lookup(error):
+    # Public releases can still be read without an installation token if
+    # GitHub rejects the token's access to this other repository.
+    if error.headers and (error.headers.get('Retry-After') or error.headers.get('X-RateLimit-Remaining') == '0'):
+        return False
+    if error.code == 404:
+        return True
+    if error.code != 403:
+        return False
+    try:
+        body = json.loads(error.read(4096))
+        return isinstance(body, dict) and body.get('message') == 'Resource not accessible by integration'
+    except (ValueError, UnicodeError):
+        return False
+
+
 def fetch_bytes(url, limit=2 * 1024 * 1024):
-    # No token is sent to release assets or redirected download hosts.
-    request = urllib.request.Request(url, headers={
+    headers = {
         'Accept': 'application/vnd.github+json' if url == RELEASE_API else 'application/octet-stream',
         'User-Agent': 'github-ci-osv-updater',
-    })
-    with urllib.request.urlopen(request, timeout=30) as response:
-        content = response.read(limit + 1)
-    require(len(content) <= limit, 'OSV upstream response exceeds size limit')
-    return content
+    }
+
+    def read(open_url, request_headers):
+        request = urllib.request.Request(url, headers=request_headers)
+        with open_url(request, timeout=30) as response:
+            content = response.read(limit + 1)
+        require(len(content) <= limit, 'OSV upstream response exceeds size limit')
+        return content
+
+    token = os.environ.get(RELEASE_TOKEN_ENV) if url == RELEASE_API else None
+    if token:
+        opener = urllib.request.build_opener(NoAuthenticatedRedirect())
+        try:
+            return read(opener.open, {**headers, 'Authorization': f'Bearer {token}'})
+        except urllib.error.HTTPError as error:
+            with error:
+                if not allows_anonymous_release_lookup(error):
+                    raise
+    return read(urllib.request.urlopen, headers)
 
 
 def release_pin(release, fetch=fetch_bytes):
