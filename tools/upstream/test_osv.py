@@ -1,10 +1,14 @@
 import copy
+from email.message import Message
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from unittest import mock
 
 import osv
@@ -32,6 +36,92 @@ def fake_fetch(metadata, checksum=DIGEST):
             return f'{checksum}  {osv.ASSET}\n'.encode()
         raise AssertionError(f'Unexpected network request: {url}')
     return fetch
+
+
+class ReleaseFetchTests(unittest.TestCase):
+    def test_token_is_used_only_for_the_exact_release_metadata_url(self):
+        checksum = osv.asset_url('2.8.0', osv.CHECKSUM_ASSET)
+        binary = osv.asset_url('2.8.0', osv.ASSET)
+        with mock.patch.dict(osv.os.environ, {osv.RELEASE_TOKEN_ENV: 'test-token'}), \
+                mock.patch.object(osv.urllib.request, 'build_opener') as opener_factory, \
+                mock.patch.object(osv.urllib.request, 'urlopen') as public_open:
+            private_open = opener_factory.return_value.open
+            private_open.return_value = io.BytesIO(b'{}')
+            public_open.side_effect = [io.BytesIO(b'checksum'), io.BytesIO(b'binary')]
+            self.assertEqual(osv.fetch_bytes(osv.RELEASE_API), b'{}')
+            self.assertEqual(osv.fetch_bytes(checksum), b'checksum')
+            self.assertEqual(osv.fetch_bytes(binary), b'binary')
+            self.assertIsInstance(opener_factory.call_args.args[0], osv.NoAuthenticatedRedirect)
+            request = private_open.call_args.args[0]
+            self.assertEqual(request.full_url, osv.RELEASE_API)
+            self.assertEqual(request.get_header('Authorization'), 'Bearer test-token')
+            self.assertEqual([call.args[0].full_url for call in public_open.call_args_list], [checksum, binary])
+            self.assertTrue(all(not call.args[0].has_header('Authorization') for call in public_open.call_args_list))
+
+    def test_local_metadata_fetch_without_token_remains_anonymous(self):
+        with mock.patch.dict(osv.os.environ, {osv.RELEASE_TOKEN_ENV: ''}), \
+                mock.patch.object(osv.urllib.request, 'urlopen', return_value=io.BytesIO(b'{}')) as public_open:
+            self.assertEqual(osv.fetch_bytes(osv.RELEASE_API), b'{}')
+            self.assertFalse(public_open.call_args.args[0].has_header('Authorization'))
+
+    def test_authenticated_release_redirect_is_not_followed(self):
+        class RedirectResponse(urllib.request.BaseHandler):
+            handler_order = 100
+            def __init__(self):
+                self.urls = []
+
+            def https_open(self, request):
+                self.urls.append(request.full_url)
+                if len(self.urls) != 1:
+                    raise AssertionError('Authenticated request followed a redirect')
+                response = urllib.response.addinfourl(
+                    io.BytesIO(), {'location': 'https://example.invalid/'}, request.full_url, code=302)
+                response.msg = 'Found'
+                return response
+
+        handler = RedirectResponse()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), handler, osv.NoAuthenticatedRedirect())
+        with mock.patch.dict(osv.os.environ, {osv.RELEASE_TOKEN_ENV: 'test-token'}), \
+                mock.patch.object(osv.urllib.request, 'build_opener', return_value=opener):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                osv.fetch_bytes(osv.RELEASE_API)
+        self.assertEqual(error.exception.code, 302)
+        self.assertEqual(handler.urls, [osv.RELEASE_API])
+
+
+    def test_release_access_denials_retry_anonymously_once(self):
+        for code, message in [(404, 'Not Found'), (403, 'Resource not accessible by integration')]:
+            error = urllib.error.HTTPError(osv.RELEASE_API, code, message, Message(),
+                                           io.BytesIO(json.dumps({'message': message}).encode()))
+            with self.subTest(code=code), \
+                    mock.patch.dict(osv.os.environ, {osv.RELEASE_TOKEN_ENV: 'test-token'}), \
+                    mock.patch.object(osv.urllib.request, 'build_opener') as opener_factory, \
+                    mock.patch.object(osv.urllib.request, 'urlopen', return_value=io.BytesIO(b'{}')) as public_open:
+                opener_factory.return_value.open.side_effect = error
+                self.assertEqual(osv.fetch_bytes(osv.RELEASE_API), b'{}')
+                public_open.assert_called_once()
+                self.assertFalse(public_open.call_args.args[0].has_header('Authorization'))
+
+    def test_rate_limits_never_fall_back_or_change_pin(self):
+        for code, name, value in [(403, 'X-RateLimit-Remaining', '0'), (403, 'Retry-After', '60'),
+                                  (403, None, None), (429, None, None)]:
+            headers = Message()
+            if name:
+                headers[name] = value
+            error = urllib.error.HTTPError(osv.RELEASE_API, code, 'rate limit exceeded', headers,
+                                           io.BytesIO(b'{"message": "API rate limit exceeded"}'))
+            with self.subTest(code=code, name=name), tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.dict(osv.os.environ, {osv.RELEASE_TOKEN_ENV: 'test-token'}), \
+                    mock.patch.object(osv.urllib.request, 'build_opener') as opener_factory, \
+                    mock.patch.object(osv.urllib.request, 'urlopen') as public_open:
+                opener_factory.return_value.open.side_effect = error
+                pin = Path(directory) / 'pin.json'
+                before = json.dumps({'version': '2.7.0', 'asset': osv.ASSET, 'sha256': DIGEST})
+                pin.write_text(before)
+                with self.assertRaises(urllib.error.HTTPError):
+                    osv.update_pin(pin)
+                public_open.assert_not_called()
+                self.assertEqual(pin.read_text(), before)
 
 
 class UpdateTests(unittest.TestCase):
